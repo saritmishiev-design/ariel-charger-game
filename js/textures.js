@@ -214,52 +214,52 @@ function fitText(ctx, text, maxW, size, font) {
   do { ctx.font = `${font} ${s}px Impact, "Arial Black", "Helvetica Neue", Arial, sans-serif`; s -= 2; } while (ctx.measureText(text).width > maxW && s > 10);
 }
 
-/** 1024×384 billboard faces. kind: 'sentra' | 'sarit' */
+/** 1024×512 (2:1) billboard faces, text as large as the face allows. kind: 'sentra' | 'sarit' */
+export const BILLBOARD_ASPECT = 2;
 export function billboardTexture(kind) {
-  const w = 1024, h = 384, c = canvas(w, h), ctx = c.getContext('2d');
+  // Drawn in 1024×512 units on a 2× canvas so the text stays crisp up close
+  const w = 1024, h = 512, c = canvas(w * 2, h * 2), ctx = c.getContext('2d');
+  ctx.scale(2, 2);
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   if (kind === 'sentra') {
     const g = ctx.createLinearGradient(0, 0, w, h);
-    g.addColorStop(0, '#111114'); g.addColorStop(1, '#2a1406');
+    g.addColorStop(0, '#0e0e11'); g.addColorStop(1, '#2a1406');
     ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = '#ff7a00'; ctx.fillRect(0, 0, w, 16); ctx.fillRect(0, h - 16, w, 16);
-    // racing stripes
-    ctx.save(); ctx.globalAlpha = 0.14; ctx.fillStyle = '#ff7a00';
-    for (let i = 0; i < 6; i++) { ctx.beginPath(); ctx.moveTo(w - 330 + i * 60, 16); ctx.lineTo(w - 290 + i * 60, 16); ctx.lineTo(w - 420 + i * 60, h - 16); ctx.lineTo(w - 460 + i * 60, h - 16); ctx.fill(); }
-    ctx.restore();
-    fitText(ctx, 'ENJOY THE 700HP!', w - 80, 128, 'italic 900');
-    const tg = ctx.createLinearGradient(0, 40, 0, 170);
-    tg.addColorStop(0, '#ffe0a8'); tg.addColorStop(0.55, '#ff8a1a'); tg.addColorStop(1, '#c84800');
-    ctx.fillStyle = tg; ctx.shadowColor = 'rgba(0,0,0,0.7)'; ctx.shadowBlur = 12; ctx.shadowOffsetY = 5;
-    ctx.fillText('ENJOY THE 700HP!', w / 2, 112);
+    ctx.fillStyle = '#ff7a00'; ctx.fillRect(0, 0, w, 18); ctx.fillRect(0, h - 18, w, 18);
+    fitText(ctx, 'ENJOY THE 700HP!', w - 50, 170, 'italic 900');
+    const tg = ctx.createLinearGradient(0, 50, 0, 210);
+    tg.addColorStop(0, '#ffe0a8'); tg.addColorStop(0.55, '#ff8a1a'); tg.addColorStop(1, '#d04c00');
+    ctx.fillStyle = tg; ctx.shadowColor = 'rgba(0,0,0,0.8)'; ctx.shadowBlur = 12; ctx.shadowOffsetY = 6;
+    ctx.fillText('ENJOY THE 700HP!', w / 2, 128);
     ctx.shadowBlur = 6; ctx.shadowOffsetY = 3;
-    ctx.fillStyle = '#f4f1ea';
-    fitText(ctx, 'But don\'t forget you drive a', w - 120, 54, '700');
-    ctx.fillText('But don\'t forget you drive a', w / 2, 232);
-    fitText(ctx, 'Nissan Sentra in real life.', w - 120, 62, '900');
+    ctx.fillStyle = '#ffffff';
+    fitText(ctx, 'But don\'t forget you drive a', w - 60, 96, '800');
+    ctx.fillText('But don\'t forget you drive a', w / 2, 286);
     ctx.fillStyle = '#ffd08a';
-    ctx.fillText('Nissan Sentra in real life.', w / 2, 300);
+    fitText(ctx, 'Nissan Sentra in real life.', w - 60, 104, '900');
+    ctx.fillText('Nissan Sentra in real life.', w / 2, 404);
   } else {
     const g = ctx.createRadialGradient(w / 2, h / 2, 40, w / 2, h / 2, w * 0.6);
     g.addColorStop(0, '#ff5c8a'); g.addColorStop(1, '#a3123f');
     ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
-    ctx.globalAlpha = 0.16; ctx.fillStyle = '#fff';
+    ctx.globalAlpha = 0.12; ctx.fillStyle = '#fff';
     const r = rng(14);
     for (let i = 0; i < 26; i++) { heartPath(ctx, r() * w, r() * h, 30 + r() * 60); ctx.fill(); }
     ctx.globalAlpha = 1;
-    ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 10; ctx.strokeRect(18, 18, w - 36, h - 36);
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 12; ctx.strokeRect(16, 16, w - 32, h - 32);
     ctx.shadowColor = 'rgba(80,0,20,0.6)'; ctx.shadowBlur = 14; ctx.shadowOffsetY = 5;
     ctx.fillStyle = '#fff';
-    fitText(ctx, 'Love, your wife', w - 140, 92, 'italic 700');
-    ctx.fillText('Love, your wife', w / 2, 120);
-    fitText(ctx, 'Sarit', 600, 176, 'italic 900');
+    fitText(ctx, 'Love, your wife', w - 90, 150, 'italic 800');
+    ctx.fillText('Love, your wife', w / 2, 140);
+    fitText(ctx, 'Sarit', 640, 260, 'italic 900');
     const tw = ctx.measureText('Sarit').width;
-    ctx.fillText('Sarit', w / 2 - 70, 262);
+    const sx = w / 2 - 95;
+    ctx.fillText('Sarit', sx, 345);
     ctx.fillStyle = '#ffe3ea';
-    heartPath(ctx, w / 2 - 70 + tw / 2 + 110, 262, 170); ctx.fill();
+    heartPath(ctx, sx + tw / 2 + 140, 345, 230); ctx.fill();
     ctx.shadowColor = 'transparent';
     ctx.fillStyle = '#e8143f';
-    heartPath(ctx, w / 2 - 70 + tw / 2 + 110, 264, 140); ctx.fill();
+    heartPath(ctx, sx + tw / 2 + 140, 348, 190); ctx.fill();
   }
   const t = toTexture(c, { aniso: 8 });
   t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
