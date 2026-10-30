@@ -10,11 +10,15 @@ A mobile-first, physics-based 3D driving game (PWA). A 1979 Dodge Charger with a
 - **Drivetrain sim:** torque curve peaking at 910 Nm / 700 hp @ 6,200 rpm, engine inertia, idle governor, rev limiter,
   friction clutch (slip, bite point, stalling), long 5-speed (2.95 / 1.94 / 1.34 / 1.00 / 0.80, 3.23 axle),
   rear axle with Pacejka-style tyre slip → wheelspin, power oversteer and rear lock-ups (no ABS).
+- **Power slides:** flooring it in 1st or 2nd breaks the rears loose (torque kick near the soft limiter), the
+  rear steps out progressively and can be held with throttle and counter-steer; traction control allows the
+  slide but trims power if it gets too big. Billowing, sun-shaded 3D tyre smoke pours off the rear tyres.
 - **Physics:** cannon-es raycast vehicle, fixed 120 Hz step, aero drag, rolling resistance, grass/verge grip.
 - **Controls:** analog GAS / BRAKE / CLUTCH pedals, draggable H-pattern Hurst shifter (or tap a gear), gyro steering
-  (DeviceOrientation, works in either landscape direction), touch-slider fallback, haptics.
+  (DeviceOrientation, either landscape direction, wide deadzone, expo curve and smoothing), touch-slider fallback, haptics.
 - **Audio (Web Audio + AudioWorklet):** 8 combustion pulses per cycle in Hemi firing order 1-8-4-3-6-5-7-2 feeding two
-  separate exhaust banks (cross-plane burble), pipe waveguides, load-dependent muffler, saturation, big-cam idle lope,
+  deliberately mismatched exhaust banks (level, pulse shape, pipe resonance, path delay) so the uneven cross-plane
+  rhythm survives a mono phone speaker, throat formants, asymmetric saturation, pipe waveguides, load-dependent muffler, saturation, big-cam idle lope,
   overrun crackle, limiter misfires, supercharger whine, intake roar, gear whine, tyre squeal, wind, starter, clunks & grinds.
 - **Track:** "Ariel Raceway", a 3.6 km closed circuit with an 800 m main straight, fast sweepers, a tight chicane,
   a 430 m back straight, a heavy-braking hairpin, esses and a final hairpin. Lap timer with best-lap memory.

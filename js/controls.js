@@ -16,9 +16,11 @@ export class Controls {
     this.pedals = { gas: 0, brake: 0, clutch: 0 };
     this.keys = new Set();
     this.steerMode = 'tilt';
-    this.tiltRange = 28;          // degrees for full lock
+    this.tiltRange = 42;          // degrees of phone rotation for full lock
+    this.tiltDeadzone = 3.5;      // degrees around centre that do nothing (hand tremor, road bumps)
     this.tiltCenter = 0;
     this.tiltRaw = 0;
+    this.tiltSmooth = 0;          // filtered steering output, -1..1
     this.tiltSeen = false;
     this.touchSteer = 0;
     this.keySteer = 0;
@@ -61,7 +63,7 @@ export class Controls {
     this.tiltSeen = true;
   }
 
-  calibrate() { this.tiltCenter = this.tiltRaw; }
+  calibrate() { this.tiltCenter = this.tiltRaw; this.tiltSmooth = 0; }
 
   // ---------------- Pedals ----------------
   bindPedal(name) {
@@ -280,9 +282,16 @@ export class Controls {
     if (this.steerMode === 'tilt' && this.tiltSeen) {
       let a = this.tiltRaw - this.tiltCenter;
       if (a > 180) a -= 360; if (a < -180) a += 360;
-      let x = clamp(a / this.tiltRange, -1, 1);
-      x = Math.abs(x) < 0.025 ? 0 : x;
-      steer = Math.sign(x) * Math.pow(Math.abs(x), 1.35);
+      // Wide deadzone, then rescale so steering still starts from zero at its edge
+      const dz = this.tiltDeadzone;
+      const mag = Math.max(0, Math.abs(a) - dz) / Math.max(1, this.tiltRange - dz);
+      // Expo curve: small tilts give very gentle steering, full lock only near the end
+      const target = Math.sign(a) * Math.pow(Math.min(1, mag), 1.5);
+      // Smooth (≈0.15 s low-pass) and rate-limit so jitter and quick wobbles don't reach the wheels
+      const k = 1 - Math.exp(-dt / 0.15);
+      const step = clamp((target - this.tiltSmooth) * k, -dt * 1.8, dt * 1.8);
+      this.tiltSmooth += step;
+      steer = this.tiltSmooth;
     } else if (this.steerMode === 'touch') {
       steer = this.touchSteer;
     }

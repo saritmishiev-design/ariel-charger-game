@@ -77,6 +77,8 @@ export class Vehicle {
     this.steer = 0;            // road-wheel angle (rad), + = left
     this.speed = 0;            // forward m/s
     this.lateralSlip = 0;      // rear lateral slip m/s
+    this.rearLoose = 0;        // 0..0.6 rear lateral grip lost to wheelspin
+    this.slideAngle = 0;       // body slip angle, degrees
     this.frontSlide = 0;
     this.wheelSpin = [0, 0, 0, 0];
     this.surfaceMu = 1;
@@ -151,10 +153,21 @@ export class Vehicle {
       this.vehicle.applyEngineForce(0, 3);
     }
 
-    // Wheelspin / lock-up kills rear lateral grip → power oversteer
+    // Wheelspin / lock-up eats rear lateral grip → power oversteer. The fall-off is progressive
+    // and never below ~40 %, so a spinning rear steps out into a slide rather than snapping round.
     const sl = Math.abs(dtn.slip);
-    const latFactor = sl < 0.12 ? 1 : Math.max(0.3, 1 - (sl - 0.12) * 1.7);
+    const latFactor = Math.max(0.45, 1 / (1 + Math.pow(Math.max(0, sl - 0.08) * 2.0, 1.5)));
     wi[2].frictionSlip = wi[3].frictionSlip = s.frictionSlipRear * mu * latFactor;
+    this.rearLoose = 1 - latFactor;
+
+    // Drift feel: extra yaw damping while the rear is loose makes the rotation build gradually
+    // (holdable with throttle and counter-steer instead of an instant spin)
+    if (this.rearLoose > 0.02) b.angularVelocity.y *= Math.max(0, 1 - this.rearLoose * 3.2 * dt);
+
+    // With traction control on, trim the throttle once the slide angle gets excessive
+    const slideAngle = Math.abs(v) > 4 ? Math.atan2(Math.abs(vLat), Math.abs(v)) * 57.3 : 0;
+    this.slideAngle = slideAngle;
+    dtn.stabilityCut = dtn.tractionControl ? clamp((slideAngle - 28) / 22, 0, 0.75) : 0;
     wi[0].frictionSlip = wi[1].frictionSlip = s.frictionSlipFront * mu;
 
     // Front disc brakes (cannon brake value is an impulse per step)

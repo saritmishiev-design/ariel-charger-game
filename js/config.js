@@ -63,7 +63,7 @@ export const SPEC = {
 
   // Steering
   maxSteer: 0.60,            // ~34° lock at the road wheel
-  steerSpeedFalloff: 21,     // m/s at which available lock halves
+  steerSpeedFalloff: 18,     // m/s at which available lock halves
 };
 
 export const PHYSICS_DT = 1 / 120;

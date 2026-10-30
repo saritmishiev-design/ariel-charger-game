@@ -1,70 +1,134 @@
-// Tyre smoke (GPU points) and skid marks (ring-buffer ribbon).
+// Tyre smoke (instanced, sun-shaded billboards) and skid marks (ring-buffer ribbon).
 import * as THREE from '../vendor/three.module.min.js';
 
+function puffTexture() {
+  // Soft, lumpy smoke puff: overlapping blurred blobs; R = density detail, A = coverage
+  const S = 128, c = document.createElement('canvas');
+  c.width = c.height = S;
+  const ctx = c.getContext('2d');
+  let seed = 7;
+  const r = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < 26; i++) {
+    const a = r() * Math.PI * 2, d = r() * S * 0.2;
+    const x = S / 2 + Math.cos(a) * d, y = S / 2 + Math.sin(a) * d, rad = S * (0.14 + r() * 0.2);
+    const g = ctx.createRadialGradient(x, y, 0, x, y, rad);
+    const v = 190 + r() * 65;
+    g.addColorStop(0, `rgba(${v},${v},${v},0.42)`);
+    g.addColorStop(1, `rgba(${v},${v},${v},0)`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, S, S);
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.NoColorSpace;
+  return t;
+}
+
+/** Billowing 3D tyre smoke: camera-facing, rotating, sun-shaded puffs (instanced quads). */
 export class TyreSmoke {
-  constructor(scene, max = 220) {
+  constructor(scene, max = 700, sunDir = new THREE.Vector3(0.5, 0.42, 0.45).normalize()) {
     this.max = max;
-    this.pos = new Float32Array(max * 3);
     this.vel = new Float32Array(max * 3);
     this.life = new Float32Array(max);
-    this.age = new Float32Array(max);
-    this.size = new Float32Array(max);
-    this.alpha = new Float32Array(max);
+    this.age = new Float32Array(max).fill(1e9);
+    this.spin = new Float32Array(max);
+    this.grow = new Float32Array(max);
+    this.peak = new Float32Array(max);
     this.next = 0;
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(this.pos, 3));
-    g.setAttribute('size', new THREE.BufferAttribute(this.size, 1));
-    g.setAttribute('alpha', new THREE.BufferAttribute(this.alpha, 1));
+
+    const g = new THREE.InstancedBufferGeometry();
+    const quad = new THREE.PlaneGeometry(1, 1);
+    g.index = quad.index;
+    g.setAttribute('position', quad.attributes.position);
+    g.setAttribute('uv', quad.attributes.uv);
+    const attr = (n) => {
+      const a = new THREE.InstancedBufferAttribute(new Float32Array(max * n), n);
+      a.setUsage(THREE.DynamicDrawUsage);
+      return a;
+    };
+    this.aPos = attr(3); this.aSize = attr(1); this.aAlpha = attr(1); this.aRot = attr(1);
+    g.setAttribute('iPos', this.aPos);
+    g.setAttribute('iSize', this.aSize);
+    g.setAttribute('iAlpha', this.aAlpha);
+    g.setAttribute('iRot', this.aRot);
+    g.instanceCount = max;
     this.geo = g;
+
     const mat = new THREE.ShaderMaterial({
       transparent: true, depthWrite: false,
-      uniforms: { scale: { value: 600 } },
-      vertexShader: `attribute float size; attribute float alpha; varying float vA; uniform float scale;
-        void main(){ vA = alpha; vec4 mv = modelViewMatrix * vec4(position,1.0);
-        gl_PointSize = size * scale / -mv.z; gl_Position = projectionMatrix * mv; }`,
-      fragmentShader: `varying float vA;
-        void main(){ vec2 c = gl_PointCoord - 0.5; float d = dot(c,c);
-        if (d > 0.25) discard; float a = vA * smoothstep(0.25, 0.0, d);
-        gl_FragColor = vec4(vec3(0.86,0.86,0.88), a); }`,
+      uniforms: { map: { value: puffTexture() }, sunDir: { value: sunDir } },
+      vertexShader: `attribute vec3 iPos; attribute float iSize; attribute float iAlpha; attribute float iRot;
+        varying vec2 vUv; varying float vA; varying vec2 vLight;
+        uniform vec3 sunDir;
+        void main() {
+          vec3 camR = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
+          vec3 camU = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
+          float c = cos(iRot), s = sin(iRot);
+          vec2 p = vec2(c * position.x - s * position.y, s * position.x + c * position.y) * iSize;
+          vec3 wp = iPos + camR * p.x + camU * p.y;
+          vec4 mv = viewMatrix * vec4(wp, 1.0);
+          // Fade puffs that would fill the screen right in front of the lens
+          vA = iAlpha * smoothstep(0.8, 3.0, -mv.z);
+          vUv = uv;
+          // Direction toward the sun in sprite space, for one-sided lighting
+          vec2 sl = vec2(dot(sunDir, camR), dot(sunDir, camU));
+          vLight = vec2(c * sl.x + s * sl.y, -s * sl.x + c * sl.y);
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: `uniform sampler2D map; varying vec2 vUv; varying float vA; varying vec2 vLight;
+        void main() {
+          vec4 t = texture2D(map, vUv);
+          float a = t.a * vA;
+          if (a < 0.004) discard;
+          float lit = clamp(0.55 + dot(vUv - 0.5, vLight) * 1.1 + (t.r - 0.85) * 0.8, 0.0, 1.0);
+          vec3 col = mix(vec3(0.50, 0.52, 0.56), vec3(0.97, 0.95, 0.92), lit);
+          gl_FragColor = vec4(col, a);
+        }`,
     });
-    this.points = new THREE.Points(g, mat);
-    this.points.frustumCulled = false;
-    scene.add(this.points);
+    this.mesh = new THREE.Mesh(g, mat);
+    this.mesh.frustumCulled = false;
+    this.mesh.renderOrder = 5;
+    scene.add(this.mesh);
   }
 
-  setViewportHeight(h) { this.points.material.uniforms.scale.value = h * 0.9; }
+  setViewportHeight() { /* world-space quads: nothing to do */ }
 
-  emit(x, y, z, vx, vz, intensity) {
+  /** Spawn one puff at a tyre contact. (tx, tz) is the direction the tyre throws it. */
+  emit(x, y, z, vx, vz, intensity, tx = 0, tz = 0) {
     const i = this.next;
     this.next = (this.next + 1) % this.max;
-    this.pos[i * 3] = x + (Math.random() - 0.5) * 0.3;
-    this.pos[i * 3 + 1] = y;
-    this.pos[i * 3 + 2] = z + (Math.random() - 0.5) * 0.3;
-    this.vel[i * 3] = vx * 0.25 + (Math.random() - 0.5) * 1.2;
-    this.vel[i * 3 + 1] = 0.5 + Math.random() * 0.9;
-    this.vel[i * 3 + 2] = vz * 0.25 + (Math.random() - 0.5) * 1.2;
-    this.life[i] = 1.6 + Math.random() * 1.4;
+    const P = this.aPos.array;
+    P[i * 3] = x + (Math.random() - 0.5) * 0.35;
+    P[i * 3 + 1] = y + Math.random() * 0.15;
+    P[i * 3 + 2] = z + (Math.random() - 0.5) * 0.35;
+    const throwV = 2 + Math.random() * 3;
+    this.vel[i * 3] = vx * 0.35 + tx * throwV + (Math.random() - 0.5) * 1.6;
+    this.vel[i * 3 + 1] = 0.8 + Math.random() * 1.0;
+    this.vel[i * 3 + 2] = vz * 0.35 + tz * throwV + (Math.random() - 0.5) * 1.6;
+    this.life[i] = 2.2 + Math.random() * 1.8;
     this.age[i] = 0;
-    this.size[i] = 0.6;
-    this.alpha[i] = 0.38 * intensity;
+    this.spin[i] = (Math.random() - 0.5) * 0.9;
+    this.aRot.array[i] = Math.random() * 6.28;
+    this.grow[i] = 5 + Math.random() * 4;              // final diameter, metres
+    this.peak[i] = (0.5 + Math.random() * 0.2) * intensity;
   }
 
   update(dt) {
+    const P = this.aPos.array, S = this.aSize.array, A = this.aAlpha.array, R = this.aRot.array, V = this.vel;
+    const drag = Math.max(0, 1 - dt * 1.8);
     for (let i = 0; i < this.max; i++) {
-      if (this.age[i] >= this.life[i]) { this.alpha[i] = 0; continue; }
+      if (this.age[i] >= this.life[i]) { S[i] = 0; A[i] = 0; continue; }
       this.age[i] += dt;
       const t = this.age[i] / this.life[i];
-      const drag = Math.max(0, 1 - dt * 1.6);
-      this.vel[i * 3] *= drag; this.vel[i * 3 + 2] *= drag;
-      this.pos[i * 3] += this.vel[i * 3] * dt;
-      this.pos[i * 3 + 1] += this.vel[i * 3 + 1] * dt;
-      this.pos[i * 3 + 2] += this.vel[i * 3 + 2] * dt;
-      this.size[i] = 0.6 + t * 4.5;
-      this.alpha[i] *= t > 0.6 ? Math.max(0, 1 - dt * 2.5) : 1;
+      V[i * 3] *= drag; V[i * 3 + 2] *= drag;
+      V[i * 3 + 1] = V[i * 3 + 1] * Math.max(0, 1 - dt * 0.9) + dt * 0.15;   // warm smoke keeps rising slowly
+      P[i * 3] += (V[i * 3] + 0.35) * dt;                                      // light breeze
+      P[i * 3 + 1] += V[i * 3 + 1] * dt;
+      P[i * 3 + 2] += (V[i * 3 + 2] + 0.2) * dt;
+      R[i] += this.spin[i] * dt;
+      S[i] = 0.7 + (this.grow[i] - 0.7) * (1 - Math.pow(1 - t, 2.2));      // fast billow, then slow spread
+      A[i] = this.peak[i] * Math.min(1, t * 8) * Math.pow(1 - t, 1.4);
     }
-    this.geo.attributes.position.needsUpdate = true;
-    this.geo.attributes.size.needsUpdate = true;
-    this.geo.attributes.alpha.needsUpdate = true;
+    this.aPos.needsUpdate = this.aSize.needsUpdate = this.aAlpha.needsUpdate = this.aRot.needsUpdate = true;
   }
 }
 

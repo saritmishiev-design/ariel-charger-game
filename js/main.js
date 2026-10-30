@@ -14,9 +14,11 @@ const $ = (id) => document.getElementById(id);
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 
 // ---------------- Settings ----------------
-const DEFAULTS = { units: 'kmh', steer: 'tilt', tilt: 28, tcs: true, auto: false, paint: 'red', volume: 0.9, cam: 0, gfx: 'high' };
+const DEFAULTS = { units: 'kmh', steer: 'tilt', tilt: 42, tcs: true, auto: false, paint: 'red', volume: 0.9, cam: 0, gfx: 'high', tiltV: 2 };
 let settings = { ...DEFAULTS };
 try { settings = { ...DEFAULTS, ...JSON.parse(localStorage.getItem('charger.settings') || '{}') }; } catch (e) { /* private mode */ }
+// v2 tilt calibration is calmer: move saved twitchy values (old default 28°) onto the new scale once
+if (settings.tiltV !== 2) { settings.tilt = DEFAULTS.tilt; settings.tiltV = 2; }
 const saveSettings = () => { try { localStorage.setItem('charger.settings', JSON.stringify(settings)); } catch (e) { /* ignore */ } };
 let bestLap = null;
 try { bestLap = parseFloat(localStorage.getItem('charger.best')) || null; } catch (e) { /* ignore */ }
@@ -78,7 +80,9 @@ const car = new CarModel(vehicle, envMap);
 scene.add(car.root, car.contact);
 car.setPaint(settings.paint);
 
-const smoke = new TyreSmoke(scene);
+const smoke = new TyreSmoke(scene, HIGH ? 700 : 360, SUN_DIR);
+const SMOKE_RATE = HIGH ? 85 : 55;   // puffs per second per rear tyre at full wheelspin
+const smokeAcc = [0, 0];
 const skids = new SkidMarks(scene);
 
 // ---------------- Audio / HUD / Controls ----------------
@@ -310,6 +314,11 @@ function frame(now) {
     const wi = vehicle.vehicle.wheelInfos;
     const longSlip = Math.abs(vehicle.drivetrain.slip);
     const rx = Math.cos(Math.atan2(b.velocity.x, b.velocity.z)), rz = -Math.sin(Math.atan2(b.velocity.x, b.velocity.z));
+    // Spinning rears throw smoke backwards (opposite the car's nose)
+    tmpQ.set(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w);
+    const nose = tmpF.set(0, 0, -1).applyQuaternion(tmpQ);
+    const spinDir = Math.sign(vehicle.drivetrain.wheelW || 1);
+    const smokeAmt = clamp(Math.max((longSlip - 0.18) * 1.5, (scrub - 0.5) * 2), 0, 1);
     for (let i = 0; i < 4; i++) {
       const w = wi[i];
       if (!w.raycastResult.body) { skids.add(i, 0, 0, 0, 0, 0, 0); continue; }
@@ -318,9 +327,14 @@ function frame(now) {
       const strength = rear ? scrub : (w.sliding ? Math.min(1, vehicle.lateralSlip / 6) : 0);
       const onTarmac = !state.offroad;
       skids.add(i, hp.x, hp.z, rx, rz, rear ? SPEC.tyreWidthRear : SPEC.tyreWidthFront, onTarmac ? strength : 0);
-      if (rear && onTarmac && (longSlip > 0.25 || scrub > 0.55) && Math.random() < 0.9) {
-        smoke.emit(hp.x, 0.3, hp.z, b.velocity.x, b.velocity.z, clamp(scrub * 1.2, 0.3, 1));
-      }
+      if (rear && onTarmac && smokeAmt > 0) {
+        // Rate-based emission so the cloud density doesn't depend on frame rate
+        smokeAcc[i - 2] += dt * SMOKE_RATE * (0.35 + 0.65 * smokeAmt);
+        while (smokeAcc[i - 2] >= 1) {
+          smokeAcc[i - 2] -= 1;
+          smoke.emit(hp.x, 0.25, hp.z, b.velocity.x, b.velocity.z, 0.45 + 0.55 * smokeAmt, -nose.x * spinDir, -nose.z * spinDir);
+        }
+      } else if (rear) smokeAcc[i - 2] = 0;
     }
     smoke.update(dt);
 
@@ -493,4 +507,4 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
 }
 
 // Debug handle (handy from the browser console)
-window.__game = { vehicle, state, audio, controls, track, camera, car, renderer };
+window.__game = { vehicle, state, audio, controls, track, camera, car, renderer, smoke };

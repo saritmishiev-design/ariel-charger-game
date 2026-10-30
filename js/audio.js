@@ -33,15 +33,21 @@ export class AudioEngine {
     // ---- Engine bus: tone shaping for that chest-thumping Hemi
     this.engineBus = ctx.createGain();
     this.engineBus.gain.value = 1.0;
+    // Low shelf for real speakers/headphones, then a "throat" lift in the 150–350 Hz band
+    // that phone speakers can actually reproduce, and a softened top end (rumble, not rasp)
     const lowShelf = ctx.createBiquadFilter();
-    lowShelf.type = 'lowshelf'; lowShelf.frequency.value = 140; lowShelf.gain.value = 7;
+    lowShelf.type = 'lowshelf'; lowShelf.frequency.value = 120; lowShelf.gain.value = 6;
+    const throat = ctx.createBiquadFilter();
+    throat.type = 'peaking'; throat.frequency.value = 190; throat.Q.value = 0.8; throat.gain.value = 5;
     const chest = ctx.createBiquadFilter();
-    chest.type = 'peaking'; chest.frequency.value = 260; chest.Q.value = 0.9; chest.gain.value = 4;
+    chest.type = 'peaking'; chest.frequency.value = 330; chest.Q.value = 1.0; chest.gain.value = 2.5;
     const presence = ctx.createBiquadFilter();
-    presence.type = 'peaking'; presence.frequency.value = 1400; presence.Q.value = 1.2; presence.gain.value = 2.5;
+    presence.type = 'peaking'; presence.frequency.value = 1200; presence.Q.value = 1.2; presence.gain.value = 1;
+    const deRasp = ctx.createBiquadFilter();
+    deRasp.type = 'highshelf'; deRasp.frequency.value = 3500; deRasp.gain.value = -4;
     this.cabin = ctx.createBiquadFilter();
     this.cabin.type = 'lowpass'; this.cabin.frequency.value = 14000; this.cabin.Q.value = 0.5;
-    this.engineBus.connect(lowShelf).connect(chest).connect(presence).connect(this.cabin).connect(this.master);
+    this.engineBus.connect(lowShelf).connect(throat).connect(chest).connect(presence).connect(deRasp).connect(this.cabin).connect(this.master);
 
     await this.createEngineNode();
 

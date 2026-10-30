@@ -41,6 +41,9 @@ export class Drivetrain {
     this.throttle = 0;
     this.tcsFactor = 1;
     this.limiterCut = false;
+    this.cutAmount = 0;        // soft rev-limiter spark cut 0..1
+    this.powerSlide = 0;       // 0..1: 1st/2nd at full throttle — rear breaks loose
+    this.stabilityCut = 0;     // set by the vehicle: throttle trimmed when the slide gets too big (TCS on)
     this.load = 0;             // effective combustion load 0..1 (for audio)
     this.engineTorque = 0;
     this.slip = 0;
@@ -154,14 +157,25 @@ export class Drivetrain {
     const Iw = s.rearAxleInertia;
     const eff = s.drivetrainEfficiency;
 
-    // Traction control (optional)
-    if (this.tractionControl && this.gear > 0 && this.slip > 0.16 && this.rpm > 1800) {
-      this.tcsFactor = Math.max(0.12, this.tcsFactor - dt * 7);
+    // Power slide: flooring it in 1st or 2nd lights up the rears. Near the limiter the torque
+    // kick breaks traction outright, so the revs hang on the limiter with the tyres spinning
+    // instead of bouncing off it.
+    const lowGearWot = this.running && this.gear > 0 && this.gear <= 2 && this.throttleInput > 0.85;
+    const nearLimiter = this.rpm > s.limiterRpm - 900;
+    const slideTarget = lowGearWot ? (nearLimiter ? 1 : 0.6) : 0;
+    this.powerSlide += (slideTarget - this.powerSlide) * Math.min(1, dt * (slideTarget > this.powerSlide ? 5 : 2.5));
+
+    // Traction control (optional). In a low-gear power slide it lets the tyres spin up to a
+    // drift-friendly slip instead of shutting the slide down.
+    const slipLimit = 0.16 + this.powerSlide * 0.42;
+    const floor = 0.12 + this.powerSlide * 0.2;
+    if (this.tractionControl && this.gear > 0 && this.slip > slipLimit && this.rpm > 1800) {
+      this.tcsFactor = Math.max(floor, this.tcsFactor - dt * 7);
     } else {
       this.tcsFactor = Math.min(1, this.tcsFactor + dt * 2.5);
     }
     // Throttle body response
-    const target = this.throttleInput * this.tcsFactor;
+    const target = this.throttleInput * this.tcsFactor * (1 - this.stabilityCut);
     this.throttle += (target - this.throttle) * Math.min(1, dt / 0.045);
 
     const engage = this.autoClutch ? this.autoEngagement(dt) : this.pedalEngagement();
@@ -170,6 +184,9 @@ export class Drivetrain {
     const G = this.ratio();
     const brakeT = this.brakeInput * s.maxBrakeForce * (1 - s.brakeBiasFront) * r;
 
+    // The torque kick breaks the rears loose; once they're spinning, full grip returns so the
+    // spinning tyres still drive the car forward through the slide
+    const muDrive = mu * (1 - 0.3 * this.powerSlide * clamp(1 - Math.abs(this.slip) / 0.35, 0, 1));
     const h = dt / SUBSTEPS;
     let Fsum = 0, loadSum = 0, slipSum = 0, Tsum = 0;
     let slipping = false;
@@ -181,11 +198,12 @@ export class Drivetrain {
       if (this.running) {
         const idleThr = clamp(0.035 + (s.idleRpm - rpm) * 0.0011, 0, 0.45);
         let thr = Math.max(this.throttle, idleThr);
-        if (rpm > s.limiterRpm) {
-          if (!this.limiterCut) this.events.push('limiter');
-          this.limiterCut = true;
-        } else if (rpm < s.limiterRpm - 220) this.limiterCut = false;
-        if (this.limiterCut) thr = 0;
+        // Soft limiter: progressive spark cut over the last ~160 rpm
+        const cutAmt = clamp((rpm - (s.limiterRpm - 140)) / 160, 0, 1);
+        if (cutAmt > 0.45 && !this.limiterCut) { this.limiterCut = true; this.events.push('limiter'); }
+        else if (cutAmt < 0.1) this.limiterCut = false;
+        this.cutAmount = cutAmt;
+        thr *= 1 - cutAmt;
         Te = this.fullTorque(rpm) * thr - this.friction(rpm) * (1 - thr);
         load = thr;
       } else {
@@ -193,7 +211,7 @@ export class Drivetrain {
         if (this.starterTime > 0) Te += rpm < 260 ? 150 : 40;
       }
 
-      const tyre = this.tyre(this.wheelW, v, N, mu);
+      const tyre = this.tyre(this.wheelW, v, N, muDrive);
       let locked = false;
 
       if (G === 0 || Tcap < 1) {
@@ -237,7 +255,7 @@ export class Drivetrain {
         this.events.push('stall');
       }
 
-      const out = this.tyre(this.wheelW, v, N, mu);
+      const out = this.tyre(this.wheelW, v, N, muDrive);
       Fsum += out.F;
       slipSum += out.s;
       loadSum += load;
