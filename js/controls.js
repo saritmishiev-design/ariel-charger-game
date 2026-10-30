@@ -16,8 +16,8 @@ export class Controls {
     this.pedals = { gas: 0, brake: 0, clutch: 0 };
     this.keys = new Set();
     this.steerMode = 'tilt';
-    this.tiltRange = 60;          // degrees of phone rotation for full lock
-    this.tiltDeadzone = 10;       // ±10° around centre does nothing at all (hand movement, bumps)
+    this.tiltRange = 40;          // degrees of phone rotation for full lock
+    this.tiltDeadzone = 5;        // ±5° around centre does nothing (kills hand tremor and bumps)
     this.tiltCenter = 0;
     this.tiltRaw = 0;
     this.tiltSmooth = 0;          // filtered steering output, -1..1
@@ -285,13 +285,14 @@ export class Controls {
       // Wide deadzone, then rescale so steering still starts from zero at its edge
       const dz = this.tiltDeadzone;
       const mag = Math.max(0, Math.abs(a) - dz) / Math.max(1, this.tiltRange - dz);
-      // Expo curve: just past the deadzone the steering is very gentle, full lock only near the end
-      const target = Math.sign(a) * Math.pow(Math.min(1, mag), 1.6);
-      // Heavy smoothing (≈0.35 s low-pass) plus a slow turn-in rate (full lock takes ~1.4 s);
-      // unwinding back toward centre is allowed twice as fast so the car straightens up readily
-      const k = 1 - Math.exp(-dt / 0.35);
+      // Progressive curve: soft just past the deadzone, then builds steadily, so a comfortable
+      // 20-30° tilt gives the 35-65 % a tight corner needs (speed-capped lock in vehicle.js keeps
+      // the same tilt safe at high speed)
+      const target = Math.sign(a) * Math.pow(Math.min(1, mag), 1.25);
+      // Smoothing (≈0.2 s low-pass) and a turn-in rate of ~0.8 s to full lock; unwinding is faster
+      const k = 1 - Math.exp(-dt / 0.2);
       const unwinding = Math.abs(target) < Math.abs(this.tiltSmooth) || Math.sign(target) !== Math.sign(this.tiltSmooth);
-      const rate = (unwinding ? 1.4 : 0.7) * dt;
+      const rate = (unwinding ? 2.2 : 1.3) * dt;
       this.tiltSmooth += clamp((target - this.tiltSmooth) * k, -rate, rate);
       steer = this.tiltSmooth;
     } else if (this.steerMode === 'touch') {

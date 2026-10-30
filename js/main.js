@@ -14,10 +14,10 @@ const $ = (id) => document.getElementById(id);
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 
 // ---------------- Settings ----------------
-const DEFAULTS = { units: 'kmh', steer: 'tilt', tilt: 60, tcs: true, auto: false, paint: 'red', volume: 0.9, cam: 0, gfx: 'high', tiltV: 3 };
+const DEFAULTS = { units: 'kmh', steer: 'tilt', tilt: 40, tcs: true, auto: false, paint: 'red', volume: 0.9, cam: 0, gfx: 'high', tiltV: 4 };
 let settings = { ...DEFAULTS };
 try { settings = { ...DEFAULTS, ...JSON.parse(localStorage.getItem('charger.settings') || '{}') }; } catch (e) { /* private mode */ }
-// Tilt calibration v3 is much calmer: move any saved (twitchier) value onto the new scale once
+// Tilt calibration changed (v4 sweet spot): move any saved value onto the new scale once
 if (settings.tiltV !== DEFAULTS.tiltV) { settings.tilt = DEFAULTS.tilt; settings.tiltV = DEFAULTS.tiltV; }
 const saveSettings = () => { try { localStorage.setItem('charger.settings', JSON.stringify(settings)); } catch (e) { /* ignore */ } };
 let bestLap = null;
