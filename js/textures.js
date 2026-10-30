@@ -214,42 +214,28 @@ function fitText(ctx, text, maxW, size, font) {
   do { ctx.font = `${font} ${s}px Impact, "Arial Black", "Helvetica Neue", Arial, sans-serif`; s -= 2; } while (ctx.measureText(text).width > maxW && s > 10);
 }
 
-/** 1024×512 (2:1) billboard faces, text as large as the face allows. kind: 'sentra' | 'sentra-glow' | 'sarit' */
+/** 1024×512 (2:1) billboard faces, text as large as the face allows. kind: 'sentra' | 'sarit' */
 export const BILLBOARD_ASPECT = 2;
 export function billboardTexture(kind) {
   // Drawn in 1024×512 units on a 2× canvas so the text stays crisp up close
   const w = 1024, h = 512, c = canvas(w * 2, h * 2), ctx = c.getContext('2d');
   ctx.scale(2, 2);
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  if (kind === 'sentra' || kind === 'sentra-glow') {
-    // Neon sign. 'sentra' is the daylight look (dark backing board, tinted glass tubes);
-    // 'sentra-glow' is the emissive map: only the lit tubes, on black.
-    const glow = kind === 'sentra-glow';
-    if (glow) { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, w, h); } else {
-      const g = ctx.createLinearGradient(0, 0, 0, h);
-      g.addColorStop(0, '#15121a'); g.addColorStop(1, '#0a090d');
-      ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
-      ctx.strokeStyle = 'rgba(255,255,255,0.035)'; ctx.lineWidth = 2;   // brushed backing panels
-      for (let x = 0; x < w; x += 128) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
-    }
-    const tube = (draw, color, width) => {
-      // Halo, coloured tube, white-hot core
-      ctx.save();
-      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-      if (glow) { ctx.shadowColor = color; ctx.shadowBlur = 26; }
-      ctx.strokeStyle = glow ? color : color + '88'; ctx.lineWidth = width; draw('stroke');
-      ctx.shadowBlur = glow ? 10 : 0;
-      ctx.strokeStyle = glow ? '#ffffff' : color; ctx.lineWidth = width * 0.38; draw('stroke');
-      ctx.restore();
-    };
-    const text = (str, y, size, weight, color, width) => {
-      fitText(ctx, str, w - 90, size, weight);
-      tube((m) => ctx.strokeText(str, w / 2, y), color, width);
-    };
-    tube(() => { ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(22, 22, w - 44, h - 44, 26); else ctx.rect(22, 22, w - 44, h - 44); ctx.stroke(); }, '#22e4ff', 9);
-    text('ENJOY THE 700HP!', 132, 150, 'italic 900', '#ff8a1a', 9);
-    text('But don\'t forget you drive a', 288, 90, '800', '#22e4ff', 6.5);
-    text('Nissan Sentra in real life.', 404, 100, '900', '#ff2f8e', 7.5);
+  if (kind === 'sentra') {
+    // Road-sign style: solid bright yellow, bold black type. The set-up line is small;
+    // the punchline is the big, dominant message.
+    ctx.fillStyle = '#ffe414'; ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = '#111'; ctx.lineWidth = 14; ctx.strokeRect(14, 14, w - 28, h - 28);
+    ctx.fillStyle = '#111';
+    fitText(ctx, 'Enjoy the 700HP!', w - 120, 58, 'italic 800');
+    ctx.fillText('Enjoy the 700HP!', w / 2, 66);
+    ctx.fillRect(w / 2 - 170, 104, 340, 5);
+    const punch = ['But don\'t forget', 'you drive a', 'Nissan Sentra', 'in real life.'];
+    const ys = [158, 248, 348, 440], sizes = [92, 92, 112, 92];
+    punch.forEach((line, i) => {
+      fitText(ctx, line, w - 70, sizes[i], '900');
+      ctx.fillText(line, w / 2, ys[i]);
+    });
   } else {
     const g = ctx.createRadialGradient(w / 2, h / 2, 40, w / 2, h / 2, w * 0.6);
     g.addColorStop(0, '#ff5c8a'); g.addColorStop(1, '#a3123f');

@@ -29,7 +29,7 @@ A mobile-first, physics-based 3D driving game (PWA). A 1979 Dodge Charger with a
   contact shadow, procedural asphalt (aggregate, rubbered racing line, tar snakes, braking-zone skid marks), anti-tiling
   grass, swaying 3D grass tufts, two kinds of instanced trees with distance LOD, a forest belt and layered snowy ridges.
   **Battery saver** in the menu lowers resolution, shadow detail and scenery density.
-- **For Ariel, from Sarit:** "Love, your wife Sarit" billboards beside the fast sections, glowing neon "Nissan Sentra"
+- **For Ariel, from Sarit:** "Love, your wife Sarit" billboards beside the fast sections, bold yellow "Nissan Sentra"
   boards in the heavy braking zones of the slow corners, a 7-second lap-complete banner and a pause screen message.
 - **Nitrous:** tap **NOS** to arm, floor the gas to spray (+55 % torque, 3.5 s bottle, refills in 20 s) with exhaust
   flames, radial speed blur, FOV kick and hiss.

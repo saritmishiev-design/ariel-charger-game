@@ -292,7 +292,7 @@ export function buildMountains(group, rand) {
 
 /**
  * Sarit's billboards. Placement follows what the driver is doing:
- *  - "Enjoy the 700HP! … Nissan Sentra" (neon) sits in the heavy braking zones of the slow corners
+ *  - "Enjoy the 700HP! … Nissan Sentra" (yellow sign) sits in the heavy braking zones of the slow corners
  *    (hairpins / chicane, radius < 50 m), just off the outside of the bend, facing the approach.
  *  - "Love, your wife Sarit" stands beside the fast, normal sections (straights and fast sweepers).
  */
@@ -302,15 +302,15 @@ export function buildBillboards(track, group) {
   const frame = new THREE.MeshStandardMaterial({ color: 0x2a2c31, metalness: 0.7, roughness: 0.45 });
   const backMat = new THREE.MeshStandardMaterial({ color: 0x8a8d93, metalness: 0.5, roughness: 0.6 });
   const saritTex = billboardTexture('sarit');
+  const sentraTex = billboardTexture('sentra');
   const mats = {
     sarit: new THREE.MeshStandardMaterial({
       map: saritTex, emissiveMap: saritTex, emissive: 0xffffff, emissiveIntensity: 0.45, roughness: 0.55, metalness: 0,
     }),
-    // Neon: only the glass tubes emit, strongly enough to glow through the tone mapping
-    sentra: new THREE.MeshStandardMaterial({
-      map: billboardTexture('sentra'), emissiveMap: billboardTexture('sentra-glow'), emissive: 0xffffff,
-      emissiveIntensity: 2.4, roughness: 0.35, metalness: 0,
-    }),
+    // Painted yellow sign, no glow. A faint fill (same idea as a sign lit by the floodlights) keeps
+    // the yellow from going dull when the face is turned away from the sun.
+    sentra: new THREE.MeshStandardMaterial({ map: sentraTex, emissiveMap: sentraTex,
+      emissive: 0xffffff, emissiveIntensity: 0.22, roughness: 0.6, metalness: 0 }),
   };
   const heartGeo = new THREE.ExtrudeGeometry(heartShape(), { depth: 0.35, bevelEnabled: true, bevelThickness: 0.12, bevelSize: 0.08, bevelSegments: 4, curveSegments: 20 });
   heartGeo.center();
@@ -405,7 +405,6 @@ export function buildBillboards(track, group) {
     }
   }
 
-  const neon = mats.sentra;
   return {
     count: spots.length, spots,
     update(dt, time) {
@@ -414,9 +413,6 @@ export function buildBillboards(track, group) {
         const beat = Math.max(0, Math.sin(time * 5)) ** 8;   // heartbeat pulse
         h.scale.setScalar(HEART * (1 + beat * 0.12));
       }
-      // Neon hum: gentle shimmer with the odd quick flicker
-      const flick = Math.sin(time * 37) > 0.985 ? 0.55 : 1;
-      neon.emissiveIntensity = (2.3 + Math.sin(time * 6.3) * 0.15) * flick;
     },
   };
 }
