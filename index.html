@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>Ariel's '79 Charger</title>
+  <meta name="description" content="700 HP 1979 Dodge Charger — physics driving game with manual 5-speed, tilt steering and a synthesised Hemi V8.">
+  <meta name="theme-color" content="#0b0b0d">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="icon" href="icons/icon-192.png" sizes="192x192" type="image/png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Charger 700">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <canvas id="scene"></canvas>
+
+  <!-- ===== HUD ===== -->
+  <div id="hud">
+    <div id="laps">
+      <div class="row big"><span>LAP <b id="lap-no">0</b></span><span id="lap-time">--:--.---</span></div>
+      <div class="row"><span>LAST</span><span id="lap-last">--:--.---</span></div>
+      <div class="row"><span>BEST</span><span id="lap-best">--:--.---</span></div>
+    </div>
+
+    <div id="cluster">
+      <div id="shiftlights"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      <div id="tach-wrap">
+        <canvas id="tach"></canvas>
+        <div id="gear">N</div>
+      </div>
+      <div id="speedo"><span id="speed">0</span><small id="speed-unit">KM/H</small></div>
+    </div>
+
+    <div id="topbtns">
+      <button id="btn-center" class="hbtn tilt-only" aria-label="Centre steering">⟳<small>CENTER</small></button>
+      <button id="btn-cam" class="hbtn" aria-label="Camera">◉<small>CAM</small></button>
+      <button id="btn-reset" class="hbtn" aria-label="Reset car">↺<small>RESET</small></button>
+      <button id="btn-pause" class="hbtn" aria-label="Pause">❚❚<small>MENU</small></button>
+    </div>
+
+    <button id="btn-start" aria-label="Start engine"><span>START</span><small>ENGINE</small></button>
+    <div id="toast"></div>
+  </div>
+
+  <!-- ===== Touch controls ===== -->
+  <div id="controls">
+    <div class="pedal-group left">
+      <div class="pedal clutch manual-only" id="pedal-clutch"><div class="fill"></div><span>CLUTCH</span><em></em></div>
+      <div class="pedal brake" id="pedal-brake"><div class="fill"></div><span>BRAKE</span><em></em></div>
+    </div>
+
+    <div id="touchwheel"><div class="track"></div><div class="thumb"></div><span>◀ STEER ▶</span></div>
+
+    <div class="pedal-group right">
+      <div id="shifter">
+        <svg viewBox="0 0 120 120" aria-hidden="true">
+          <path d="M20 19 V101 M60 19 V101 M100 19 V101 M20 60 H100" />
+        </svg>
+        <b style="left:16.67%;top:6%">1</b><b style="left:50%;top:6%">3</b><b style="left:83.33%;top:6%">5</b>
+        <b style="left:16.67%;top:94%">2</b><b style="left:50%;top:94%">4</b><b style="left:83.33%;top:94%" class="rev">R</b>
+        <div id="knob"></div>
+      </div>
+      <div class="pedal gas" id="pedal-gas"><div class="fill"></div><span>GAS</span><em></em></div>
+    </div>
+  </div>
+
+  <!-- ===== Menu ===== -->
+  <div id="menu" class="show">
+    <div class="panel">
+      <header>
+        <div class="badge">700 HP · HEMI V8 · 5-SPEED · RWD</div>
+        <h1>ARIEL'S <span>'79 CHARGER</span></h1>
+        <p id="menu-sub">ARIEL RACEWAY · 3.6 KM</p>
+      </header>
+
+      <div class="grid">
+        <div class="setting">
+          <label>Paint</label>
+          <div id="swatches"></div>
+        </div>
+        <div class="setting">
+          <label>Steering</label>
+          <div class="seg" id="set-steer"><button data-v="tilt">Tilt phone</button><button data-v="touch">Touch slider</button></div>
+        </div>
+        <div class="setting">
+          <label>Tilt lock (lower = sharper)</label>
+          <input type="range" id="set-tilt" min="14" max="45" step="1">
+        </div>
+        <div class="setting">
+          <label>Clutch</label>
+          <div class="seg" id="set-auto"><button data-v="0">Manual pedal</button><button data-v="1">Auto-clutch</button></div>
+        </div>
+        <div class="setting">
+          <label>Traction control</label>
+          <div class="seg" id="set-tcs"><button data-v="0">Off (raw 700 hp)</button><button data-v="1">On</button></div>
+        </div>
+        <div class="setting">
+          <label>Units</label>
+          <div class="seg" id="set-units"><button data-v="kmh">km/h</button><button data-v="mph">mph</button></div>
+        </div>
+        <div class="setting wide">
+          <label>Engine volume</label>
+          <input type="range" id="set-vol" min="0" max="1.5" step="0.05">
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="btn-go" class="primary">TURN THE KEY</button>
+        <button id="btn-restart" class="ghost paused-only">RESTART RACE</button>
+        <button id="btn-calibrate" class="ghost paused-only">CENTER TILT</button>
+      </div>
+
+      <details class="help">
+        <summary>How to drive · best lap <b id="best-lap">—</b></summary>
+        <ul>
+          <li><b>Hold the phone like a steering wheel</b> (landscape) and tilt to steer. Tap <b>CENTER</b> to re-zero.</li>
+          <li><b>Pull away:</b> hold CLUTCH → drag the knob (or tap) into <b>1</b> → add a little GAS while slowly lifting the clutch.</li>
+          <li><b>Shift:</b> lift off gas, CLUTCH in, move the knob, clutch out. Shifting without the clutch grinds unless the revs are matched.</li>
+          <li>Pedals are analog: touch near the top to feather, lower for full.</li>
+          <li>700 hp through skinny '70s tyres — be gentle with the throttle out of corners or the rear will step out.</li>
+          <li>Stalled? Clutch in (or neutral) and tap <b>START</b>.</li>
+          <li>Keyboard: W/S/A/D or arrows · Space = clutch · 1-5, R, N · I = ignition · C = camera · T = reset · Esc = menu.</li>
+        </ul>
+      </details>
+    </div>
+  </div>
+
+  <div id="rotate"><div>↻</div><p>Turn your phone sideways</p></div>
+  <div id="loading"><div class="spin"></div><p>Warming up the Hemi…</p></div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
