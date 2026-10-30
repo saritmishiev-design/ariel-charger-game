@@ -44,6 +44,8 @@ export class Drivetrain {
     this.cutAmount = 0;        // soft rev-limiter spark cut 0..1
     this.powerSlide = 0;       // 0..1: 1st/2nd at full throttle — rear breaks loose
     this.stabilityCut = 0;     // set by the vehicle: throttle trimmed when the slide gets too big (TCS on)
+    this.nitrous = 0;          // input: 1 while the NOS solenoids are open
+    this.nitrousAmt = 0;       // smoothed 0..1
     this.load = 0;             // effective combustion load 0..1 (for audio)
     this.engineTorque = 0;
     this.slip = 0;
@@ -187,6 +189,9 @@ export class Drivetrain {
     // The torque kick breaks the rears loose; once they're spinning, full grip returns so the
     // spinning tyres still drive the car forward through the slide
     const muDrive = mu * (1 - 0.3 * this.powerSlide * clamp(1 - Math.abs(this.slip) / 0.35, 0, 1));
+    // Nitrous: a big wet shot, ~+55 % torque (≈ +380 hp at the peak), only with the engine lit
+    this.nitrousAmt += ((this.running ? this.nitrous : 0) - this.nitrousAmt) * Math.min(1, dt / 0.08);
+    const nosMul = 1 + 0.55 * this.nitrousAmt;
     const h = dt / SUBSTEPS;
     let Fsum = 0, loadSum = 0, slipSum = 0, Tsum = 0;
     let slipping = false;
@@ -204,7 +209,7 @@ export class Drivetrain {
         else if (cutAmt < 0.1) this.limiterCut = false;
         this.cutAmount = cutAmt;
         thr *= 1 - cutAmt;
-        Te = this.fullTorque(rpm) * thr - this.friction(rpm) * (1 - thr);
+        Te = this.fullTorque(rpm) * thr * nosMul - this.friction(rpm) * (1 - thr);
         load = thr;
       } else {
         Te = -this.friction(rpm) - (rpm > 1 ? 25 : 0);

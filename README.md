@@ -27,7 +27,11 @@ A mobile-first, physics-based 3D driving game (PWA). A 1979 Dodge Charger with a
   contact shadow, procedural asphalt (aggregate, rubbered racing line, tar snakes, braking-zone skid marks), anti-tiling
   grass, swaying 3D grass tufts, two kinds of instanced trees with distance LOD, a forest belt and layered snowy ridges.
   **Battery saver** in the menu lowers resolution, shadow detail and scenery density.
-- **For Ariel, from Sarit:** trackside billboards, a lap-complete banner and a pause screen with personal messages.
+- **For Ariel, from Sarit:** "Love, your wife Sarit" billboards beside the fast sections, glowing neon "Nissan Sentra"
+  boards in the heavy braking zones of the slow corners, a 7-second lap-complete banner and a pause screen message.
+- **Nitrous:** tap **NOS** to arm, floor the gas to spray (+55 % torque, 3.5 s bottle, refills in 20 s) with exhaust
+  flames, radial speed blur, FOV kick and hiss.
+- **HUD:** lap progress bar with distance to the finish; camera button cycles **Chase / Cockpit / Hood**.
 - **PWA:** `manifest.json` (fullscreen, landscape) + service worker with offline precache.
 
 ## Driving
@@ -36,7 +40,7 @@ A mobile-first, physics-based 3D driving game (PWA). A 1979 Dodge Charger with a
 3. Shift: lift, clutch in, move the knob, clutch out. Without the clutch the box grinds unless the revs match.
 4. Traction control is on by default; turn it off in the menu for raw 700 hp. **Auto-clutch** hides the clutch pedal.
 
-Keyboard (desktop testing): W/S/A/D or arrows, Space = clutch, 1-5 / R / N, I = ignition, C = camera, T = reset, Esc = menu.
+Keyboard (desktop testing): W/S/A/D or arrows, Space = clutch, 1-5 / R / N, I = ignition, C = camera, X = NOS, T = reset, Esc = menu.
 
 ## Run locally
 Any static server works (the service worker and motion sensors need `localhost` or HTTPS):

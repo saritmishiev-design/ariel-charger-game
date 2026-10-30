@@ -214,30 +214,42 @@ function fitText(ctx, text, maxW, size, font) {
   do { ctx.font = `${font} ${s}px Impact, "Arial Black", "Helvetica Neue", Arial, sans-serif`; s -= 2; } while (ctx.measureText(text).width > maxW && s > 10);
 }
 
-/** 1024×512 (2:1) billboard faces, text as large as the face allows. kind: 'sentra' | 'sarit' */
+/** 1024×512 (2:1) billboard faces, text as large as the face allows. kind: 'sentra' | 'sentra-glow' | 'sarit' */
 export const BILLBOARD_ASPECT = 2;
 export function billboardTexture(kind) {
   // Drawn in 1024×512 units on a 2× canvas so the text stays crisp up close
   const w = 1024, h = 512, c = canvas(w * 2, h * 2), ctx = c.getContext('2d');
   ctx.scale(2, 2);
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  if (kind === 'sentra') {
-    const g = ctx.createLinearGradient(0, 0, w, h);
-    g.addColorStop(0, '#0e0e11'); g.addColorStop(1, '#2a1406');
-    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = '#ff7a00'; ctx.fillRect(0, 0, w, 18); ctx.fillRect(0, h - 18, w, 18);
-    fitText(ctx, 'ENJOY THE 700HP!', w - 50, 170, 'italic 900');
-    const tg = ctx.createLinearGradient(0, 50, 0, 210);
-    tg.addColorStop(0, '#ffe0a8'); tg.addColorStop(0.55, '#ff8a1a'); tg.addColorStop(1, '#d04c00');
-    ctx.fillStyle = tg; ctx.shadowColor = 'rgba(0,0,0,0.8)'; ctx.shadowBlur = 12; ctx.shadowOffsetY = 6;
-    ctx.fillText('ENJOY THE 700HP!', w / 2, 128);
-    ctx.shadowBlur = 6; ctx.shadowOffsetY = 3;
-    ctx.fillStyle = '#ffffff';
-    fitText(ctx, 'But don\'t forget you drive a', w - 60, 96, '800');
-    ctx.fillText('But don\'t forget you drive a', w / 2, 286);
-    ctx.fillStyle = '#ffd08a';
-    fitText(ctx, 'Nissan Sentra in real life.', w - 60, 104, '900');
-    ctx.fillText('Nissan Sentra in real life.', w / 2, 404);
+  if (kind === 'sentra' || kind === 'sentra-glow') {
+    // Neon sign. 'sentra' is the daylight look (dark backing board, tinted glass tubes);
+    // 'sentra-glow' is the emissive map: only the lit tubes, on black.
+    const glow = kind === 'sentra-glow';
+    if (glow) { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, w, h); } else {
+      const g = ctx.createLinearGradient(0, 0, 0, h);
+      g.addColorStop(0, '#15121a'); g.addColorStop(1, '#0a090d');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+      ctx.strokeStyle = 'rgba(255,255,255,0.035)'; ctx.lineWidth = 2;   // brushed backing panels
+      for (let x = 0; x < w; x += 128) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+    }
+    const tube = (draw, color, width) => {
+      // Halo, coloured tube, white-hot core
+      ctx.save();
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      if (glow) { ctx.shadowColor = color; ctx.shadowBlur = 26; }
+      ctx.strokeStyle = glow ? color : color + '88'; ctx.lineWidth = width; draw('stroke');
+      ctx.shadowBlur = glow ? 10 : 0;
+      ctx.strokeStyle = glow ? '#ffffff' : color; ctx.lineWidth = width * 0.38; draw('stroke');
+      ctx.restore();
+    };
+    const text = (str, y, size, weight, color, width) => {
+      fitText(ctx, str, w - 90, size, weight);
+      tube((m) => ctx.strokeText(str, w / 2, y), color, width);
+    };
+    tube(() => { ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(22, 22, w - 44, h - 44, 26); else ctx.rect(22, 22, w - 44, h - 44); ctx.stroke(); }, '#22e4ff', 9);
+    text('ENJOY THE 700HP!', 132, 150, 'italic 900', '#ff8a1a', 9);
+    text('But don\'t forget you drive a', 288, 90, '800', '#22e4ff', 6.5);
+    text('Nissan Sentra in real life.', 404, 100, '900', '#ff2f8e', 7.5);
   } else {
     const g = ctx.createRadialGradient(w / 2, h / 2, 40, w / 2, h / 2, w * 0.6);
     g.addColorStop(0, '#ff5c8a'); g.addColorStop(1, '#a3123f');

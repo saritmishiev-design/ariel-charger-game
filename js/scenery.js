@@ -290,102 +290,133 @@ export function buildMountains(group, rand) {
   }
 }
 
-/** Sarit's billboards, alternating messages, just off the outside of each bend and turned to face the approach. */
+/**
+ * Sarit's billboards. Placement follows what the driver is doing:
+ *  - "Enjoy the 700HP! … Nissan Sentra" (neon) sits in the heavy braking zones of the slow corners
+ *    (hairpins / chicane, radius < 50 m), just off the outside of the bend, facing the approach.
+ *  - "Love, your wife Sarit" stands beside the fast, normal sections (straights and fast sweepers).
+ */
 export function buildBillboards(track, group) {
   // Big enough to read at speed on a phone: 44 m × 22 m face, bottom edge 2.5 m up (clear of the 0.9 m walls)
   const W = 44, H = W / BILLBOARD_ASPECT, POST = 2.5, HEART = 7;
-  const faces = {
-    sentra: billboardTexture('sentra'),
-    sarit: billboardTexture('sarit'),
-  };
   const frame = new THREE.MeshStandardMaterial({ color: 0x2a2c31, metalness: 0.7, roughness: 0.45 });
   const backMat = new THREE.MeshStandardMaterial({ color: 0x8a8d93, metalness: 0.5, roughness: 0.6 });
-  const faceMat = (t) => new THREE.MeshStandardMaterial({
-    map: t, emissiveMap: t, emissive: 0xffffff, emissiveIntensity: 0.45, roughness: 0.55, metalness: 0,
-  });
-  const mats = { sentra: faceMat(faces.sentra), sarit: faceMat(faces.sarit) };
+  const saritTex = billboardTexture('sarit');
+  const mats = {
+    sarit: new THREE.MeshStandardMaterial({
+      map: saritTex, emissiveMap: saritTex, emissive: 0xffffff, emissiveIntensity: 0.45, roughness: 0.55, metalness: 0,
+    }),
+    // Neon: only the glass tubes emit, strongly enough to glow through the tone mapping
+    sentra: new THREE.MeshStandardMaterial({
+      map: billboardTexture('sentra'), emissiveMap: billboardTexture('sentra-glow'), emissive: 0xffffff,
+      emissiveIntensity: 2.4, roughness: 0.35, metalness: 0,
+    }),
+  };
   const heartGeo = new THREE.ExtrudeGeometry(heartShape(), { depth: 0.35, bevelEnabled: true, bevelThickness: 0.12, bevelSize: 0.08, bevelSegments: 4, curveSegments: 20 });
   heartGeo.center();
   const heartMat = new THREE.MeshPhysicalMaterial({ color: 0xd0103a, emissive: 0x700018, emissiveIntensity: 0.6, roughness: 0.25, clearcoat: 1, metalness: 0.1 });
   const hearts = [], spots = [];
+  const N = track.N, K = track.curvature;
+  const maxK = (from, count) => { let m = 0; for (let j = 0; j < count; j++) m = Math.max(m, Math.abs(K[(from + j + N) % N])); return m; };
 
-  // Corner entries: where a straight ends and the bend begins
-  const N = track.N, TH = 1 / 160, entries = [];
+  const place = (kind, x, z, eyeIndex, index) => {
+    const eye = track.points[(eyeIndex + N) % N];
+    let nx = eye.x - x, nz = eye.z - z;
+    const nl = Math.hypot(nx, nz); nx /= nl; nz /= nl;
+    const ax = nz, az = -nx;   // board's long axis
+    if (z > -70 && x > -400 && x < 300) return false;   // grandstands and pit building
+    // Every part of the face and legs stays at least 19 m from the centreline (3 m behind the barriers)
+    if (![-1, -0.66, -0.33, 0, 0.33, 0.66, 1].every(f => track.clearOfTrack(x + ax * f * (W / 2 + 1), z + az * f * (W / 2 + 1), 19))) return false;
+    const g = new THREE.Group();
+    const board = new THREE.Mesh(new THREE.BoxGeometry(W + 0.6, H + 0.6, 0.4), [frame, frame, frame, frame, mats[kind], backMat]);
+    board.position.y = POST + H / 2;
+    board.castShadow = true; board.receiveShadow = true;
+    g.add(board);
+    // Four steel legs from the ground up behind the face (nothing sits below y = 0)
+    const legH = POST + H * 0.75;
+    for (const s of [-0.75, -0.25, 0.25, 0.75]) {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.9, legH, 0.9), frame);
+      post.position.set(s * W * 0.5, legH / 2, -0.75);
+      post.castShadow = true;
+      g.add(post);
+    }
+    for (let i = -4; i <= 4; i++) {   // floodlights along the top edge
+      const lamp = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.4, 0.6), frame);
+      lamp.position.set(i * W / 9, POST + H + 0.8, 0.8);
+      g.add(lamp);
+    }
+    if (kind === 'sarit') {
+      const heart = new THREE.Mesh(heartGeo, heartMat);
+      heart.scale.setScalar(HEART);
+      heart.position.set(0, POST + H + 0.6 + HEART * 0.7, 0);
+      heart.castShadow = true;
+      g.add(heart);
+      hearts.push(heart);
+    }
+    mergeByMaterial(g);
+    g.position.set(x, 0, z);
+    g.rotation.y = Math.atan2(nx, nz);
+    group.add(g);
+    // Keep trees out of the board and its sightline back to the track
+    const clear = [0, 18, 36].map(d => ({ x: x + nx * d, z: z + nz * d }));
+    spots.push({ x, z, kind, index, nx, nz, clear });
+    return true;
+  };
+  const near = (x, z, d) => spots.some(o => (o.x - x) ** 2 + (o.z - z) ** 2 < d * d);
+
+  // Corner entries: where a straight ends and the bend begins; "slow" = tightest radius under 50 m
+  const slow = [];
   for (let i = 0; i < N; i++) {
-    if (Math.abs(track.curvature[i]) > TH && Math.abs(track.curvature[(i - 1 + N) % N]) <= TH) entries.push(i);
+    if (Math.abs(K[i]) > 1 / 160 && Math.abs(K[(i - 1 + N) % N]) <= 1 / 160 && maxK(i, 80) > 1 / 50) slow.push(i);
   }
-  let n = 0;
-  for (const e of entries) {
+
+  // 1) Neon Sentra boards: in the braking zone, beyond the outside of the slow corner, facing the approach
+  for (const e of slow) {
     const kA = (e - 25 + N) % N;
     const t = track.tangents[kA], r = track.rights[kA], p = track.points[e];
-    // The driver's eye on the approach, ~120 m before the bend: the board turns to face it
-    const eye = track.points[(e - 60 + N) % N];
-    const outward = track.curvature[(e + 10) % N] > 0 ? -1 : 1;
-    let placed = false;
-    // Off to the outside so it sits beside the HUD cluster, not behind it at the vanishing point
+    const outward = K[(e + 10) % N] > 0 ? -1 : 1;
+    let done = false;
     for (const side of [outward, -outward]) {
       for (const L of [34, 42, 50]) {
-        for (let D = 0; D <= 80 && !placed; D += 10) {
+        for (let D = 0; D <= 80 && !done; D += 10) {
           const x = p.x + t.x * D + r.x * side * L, z = p.z + t.z * D + r.z * side * L;
-          let nx = eye.x - x, nz = eye.z - z;
-          const nl = Math.hypot(nx, nz); nx /= nl; nz /= nl;
-          const ax = nz, az = -nx;   // board's long axis
-          if (z > -70 && x > -400 && x < 300) continue;   // grandstands and pit building
-          if (spots.some(o => (o.x - x) ** 2 + (o.z - z) ** 2 < 230 * 230)) continue;
-          // Every part of the face and legs stays at least 19 m from the centreline (3 m behind the barriers)
-          const ok = [-1, -0.66, -0.33, 0, 0.33, 0.66, 1].every(f => track.clearOfTrack(x + ax * f * (W / 2 + 1), z + az * f * (W / 2 + 1), 19));
-          if (!ok) continue;
-          const kind = n % 2 === 0 ? 'sentra' : 'sarit';
-          const g = new THREE.Group();
-          const board = new THREE.Mesh(new THREE.BoxGeometry(W + 0.6, H + 0.6, 0.4), [frame, frame, frame, frame, mats[kind], backMat]);
-          board.position.y = POST + H / 2;
-          board.castShadow = true; board.receiveShadow = true;
-          g.add(board);
-          // Four steel legs from the ground up behind the face (nothing sits below y = 0)
-          const legH = POST + H * 0.75;
-          for (const s of [-0.75, -0.25, 0.25, 0.75]) {
-            const post = new THREE.Mesh(new THREE.BoxGeometry(0.9, legH, 0.9), frame);
-            post.position.set(s * W * 0.5, legH / 2, -0.75);
-            post.castShadow = true;
-            g.add(post);
-          }
-          // Floodlights along the top edge
-          for (let i = -4; i <= 4; i++) {
-            const lamp = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.4, 0.6), frame);
-            lamp.position.set(i * W / 9, POST + H + 0.8, 0.8);
-            g.add(lamp);
-          }
-          if (kind === 'sarit') {
-            const heart = new THREE.Mesh(heartGeo, heartMat);
-            heart.scale.setScalar(HEART);
-            heart.position.set(0, POST + H + 0.6 + HEART * 0.7, 0);
-            heart.castShadow = true;
-            g.add(heart);
-            hearts.push(heart);
-          }
-          mergeByMaterial(g);
-          g.position.set(x, 0, z);
-          g.rotation.y = Math.atan2(nx, nz);
-          group.add(g);
-          // Keep trees out of the board and its sightline back to the track
-          const clear = [0, 18, 36].map(d => ({ x: x + nx * d, z: z + nz * d }));
-          spots.push({ x, z, kind, index: e, nx, nz, clear });
-          placed = true;
-          n++;
+          if (near(x, z, 200)) continue;
+          done = place('sentra', x, z, e - 60, e);
         }
-        if (placed) break;
+        if (done) break;
       }
-      if (placed) break;
+      if (done) break;
     }
   }
+
+  // 2) Sarit boards: beside fast sections (radius > 90 m), never in a braking zone
+  const inBrakingZone = (k) => slow.some(e => { const d = (e - k + N) % N; return d < 110; });
+  for (let k = 0; k < N; k += 8) {
+    if (maxK(k - 40, 80) > 1 / 90 || inBrakingZone(k)) continue;
+    const p = track.points[k], r = track.rights[k];
+    let done = false;
+    for (const side of [1, -1]) {
+      for (const L of [34, 42, 50]) {
+        const x = p.x + r.x * side * L, z = p.z + r.z * side * L;
+        if (near(x, z, 260)) continue;
+        if ((done = place('sarit', x, z, k - 60, k))) break;
+      }
+      if (done) break;
+    }
+  }
+
+  const neon = mats.sentra;
   return {
-    count: n, spots,
+    count: spots.length, spots,
     update(dt, time) {
       for (const h of hearts) {
         h.rotation.y += dt * 1.2;
         const beat = Math.max(0, Math.sin(time * 5)) ** 8;   // heartbeat pulse
         h.scale.setScalar(HEART * (1 + beat * 0.12));
       }
+      // Neon hum: gentle shimmer with the odd quick flicker
+      const flick = Math.sin(time * 37) > 0.985 ? 0.55 : 1;
+      neon.emissiveIntensity = (2.3 + Math.sin(time * 6.3) * 0.15) * flick;
     },
   };
 }

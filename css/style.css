@@ -37,6 +37,58 @@ body.playing #hud { display: block; }
 #laps .row.big { color: var(--text); font-size: 15px; font-weight: 700; }
 #laps b { color: var(--accent); }
 
+/* Lap progress: slim bar with a car marker running to a chequered finish */
+#progress { margin-top: 5px; padding-top: 5px; border-top: 1px solid var(--line); }
+.prog-track {
+  position: relative; height: 7px; border-radius: 4px; overflow: visible;
+  background:
+    repeating-conic-gradient(#f4f4f4 0 25%, #111 0 50%) right / 7px 7px no-repeat,
+    rgba(255, 255, 255, 0.12);
+  background-size: 7px 7px, auto; background-position: right center, 0 0;
+}
+#prog-fill {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 4px;
+  background: linear-gradient(90deg, #ff4f7e, var(--accent) 70%, #ffd08a);
+  box-shadow: 0 0 8px rgba(255, 122, 0, 0.55);
+}
+#prog-car {
+  position: absolute; top: 50%; left: 0; width: 11px; height: 11px; margin: -5.5px 0 0 -5.5px; border-radius: 50%;
+  background: #fff; border: 2px solid var(--accent); box-shadow: 0 0 6px rgba(255, 255, 255, 0.8);
+}
+#progress .row { margin-top: 3px; font-size: 10px; letter-spacing: 1px; }
+
+/* Nitrous button: ring shows the bottle level (--nos 0..1) */
+#btn-nos {
+  position: absolute; pointer-events: auto; touch-action: none;
+  right: calc(12px + var(--sr) + min(17vw, 108px) + 10px + min(36vh, 150px) * 0.5 - 34px);
+  bottom: calc(10px + var(--sb) + min(36vh, 150px) + 18px);
+  width: 68px; height: 68px; border-radius: 50%; border: 0; padding: 0;
+  background:
+    radial-gradient(circle at 40% 35%, #5fd0ff, #0a4fa8 62%, #062a5c 72%, transparent 73%),
+    conic-gradient(#33d6ff calc(var(--nos, 1) * 360deg), rgba(255, 255, 255, 0.14) 0);
+  box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.55), 0 6px 14px rgba(0, 0, 0, 0.5);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; color: #fff;
+}
+#btn-nos span { font-weight: 900; font-style: italic; font-size: 17px; letter-spacing: 1px; text-shadow: 0 1px 3px #000; }
+#btn-nos small { font-size: 8px; letter-spacing: 1px; opacity: 0.85; }
+#btn-nos.armed { animation: nosarm 0.8s ease-in-out infinite; }
+#btn-nos.spraying { box-shadow: 0 0 0 3px #bff3ff, 0 0 26px #33d6ff, 0 0 60px rgba(51, 214, 255, 0.6); }
+#btn-nos.empty { filter: grayscale(0.85) brightness(0.7); }
+@keyframes nosarm { 50% { box-shadow: 0 0 0 3px #33d6ff, 0 0 22px rgba(51, 214, 255, 0.7); } }
+body.playing #controls #btn-nos { display: flex; }
+
+/* NOS rush: vignette + streaks layered over the (radially blurred) 3D view */
+#speedfx {
+  position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.25s;
+  background:
+    radial-gradient(ellipse at 50% 45%, transparent 38%, rgba(20, 90, 170, 0.35) 75%, rgba(0, 20, 50, 0.7) 100%),
+    repeating-conic-gradient(from 0deg at 50% 45%, rgba(255, 255, 255, 0.12) 0 0.6deg, transparent 0.6deg 7deg);
+  -webkit-mask-image: radial-gradient(ellipse at 50% 45%, transparent 30%, #000 70%);
+  mask-image: radial-gradient(ellipse at 50% 45%, transparent 30%, #000 70%);
+}
+#speedfx.on { opacity: 1; animation: rush 0.12s linear infinite; }
+@keyframes rush { 50% { transform: scale(1.03); } }
+
 #cluster {
   position: absolute; top: calc(4px + var(--st)); left: 50%; transform: translateX(-50%);
   display: flex; flex-direction: column; align-items: center;
@@ -109,11 +161,13 @@ body.touch-steer .tilt-only { display: none; }
 #lap-banner p { margin: 0; font-size: clamp(14px, 2.6vw, 20px); font-weight: 700; line-height: 1.25; color: #fff; text-shadow: 0 2px 6px rgba(80,0,20,0.5); }
 #lap-banner b { display: block; font-family: Impact, "Arial Black", sans-serif; font-style: italic; font-size: 1.45em; letter-spacing: 1px; }
 .lb-heart { font-size: clamp(34px, 6vw, 52px); color: #fff; animation: beat 0.9s ease-in-out infinite; flex: none; }
-#lap-banner.show { animation: banner 4s ease forwards; }
+/* 7 s: quick entrance, long steady hold, then a slow 1.6 s fade so it can be read while driving */
+#lap-banner.show { animation: banner 7s linear forwards; }
 @keyframes banner {
-  0% { opacity: 0; transform: translate(-50%, -30px) scale(0.9); }
-  8%, 88% { opacity: 1; transform: translate(-50%, 0) scale(1); }
-  100% { opacity: 0; transform: translate(-50%, -12px) scale(0.98); }
+  0% { opacity: 0; transform: translate(-50%, -30px) scale(0.92); animation-timing-function: cubic-bezier(.2,.8,.3,1); }
+  6% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  77% { opacity: 1; transform: translate(-50%, 0) scale(1); animation-timing-function: ease-in-out; }
+  100% { opacity: 0; transform: translate(-50%, -8px) scale(0.99); }
 }
 @keyframes beat { 0%, 100% { transform: scale(1); } 15% { transform: scale(1.22); } 30% { transform: scale(1); } 45% { transform: scale(1.14); } }
 

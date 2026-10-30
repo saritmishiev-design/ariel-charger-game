@@ -102,6 +102,11 @@ export class AudioEngine {
     this.windG = ctx.createGain(); this.windG.gain.value = 0;
     noise().connect(this.windF).connect(this.windG).connect(this.master);
 
+    // Nitrous: high-pressure hiss through the solenoids and nozzles
+    this.nosF = ctx.createBiquadFilter(); this.nosF.type = 'highpass'; this.nosF.frequency.value = 2400;
+    this.nosG = ctx.createGain(); this.nosG.gain.value = 0;
+    noise().connect(this.nosF).connect(this.nosG).connect(this.master);
+
     // Transmission whine (straight-cut-ish gear noise)
     this.gearOsc = ctx.createOscillator(); this.gearOsc.type = 'sine';
     this.gearG = ctx.createGain(); this.gearG.gain.value = 0;
@@ -171,7 +176,9 @@ export class AudioEngine {
     this.p.load.setTargetAtTime(load, t, 0.03);
     this.p.running.setTargetAtTime(s.running ? 1 : 0, t, 0.001);
     this.p.cut.setTargetAtTime(s.cut ? 1 : 0, t, 0.001);
-    this.p.gain.setTargetAtTime(s.running ? 1 : 0.0, t, s.running ? 0.01 : 0.12);
+    const nos = s.nitrous || 0;
+    this.p.gain.setTargetAtTime(s.running ? 1 + nos * 0.3 : 0.0, t, s.running ? 0.01 : 0.12);
+    this.nosG.gain.setTargetAtTime(nos * 0.09, t, 0.03);
 
     const crankHz = rpm / 60;
     const thr = s.throttle;

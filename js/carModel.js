@@ -219,6 +219,34 @@ export class CarModel {
     this.contact.renderOrder = 1;
     this.contactCenterZ = (zF + zR) / 2;
 
+    // Exhaust flames (nitrous, and short spits on the limiter): additive cones out of each tail pipe
+    this.flameMat = new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+      uniforms: { time: { value: 0 }, amt: { value: 0 } },
+      vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: `uniform float time; uniform float amt; varying vec2 vUv;
+        void main() {
+          float v = vUv.y;                                   // 0 at the pipe, 1 at the tip
+          vec3 col = mix(vec3(0.45, 0.65, 1.7), vec3(1.8, 0.85, 0.25), smoothstep(0.05, 0.4, v));
+          col = mix(col, vec3(1.2, 0.3, 0.05), smoothstep(0.55, 1.0, v));
+          float lick = 0.65 + 0.35 * sin(time * 70.0 + vUv.x * 25.0 + v * 9.0);
+          float a = pow(1.0 - v, 1.4) * lick * amt;
+          gl_FragColor = vec4(col * a, a);
+        }`,
+    });
+    const flameGeo = new THREE.ConeGeometry(0.075, 1, 14, 1, true).translate(0, 0.5, 0).rotateX(Math.PI / 2);
+    this.flames = [];
+    for (const s of [-1, 1]) {
+      const f = new THREE.Mesh(flameGeo, this.flameMat);
+      f.position.set(s * 0.62, Y(0.25), zR + 0.1);
+      f.renderOrder = 6;
+      f.frustumCulled = false;
+      f.visible = false;
+      this.body.add(f);
+      this.flames.push(f);
+    }
+    this.flame = 0;   // 0..1, set by the game each frame
+
     // Visual suspension feel
     this.pitch = 0;
     this.roll = 0;
@@ -276,6 +304,18 @@ export class CarModel {
       w.outer.rotation.set(0, i < 2 ? wi[i].steering : 0, 0);
       w.angle -= v.wheelSpin[i] * dt;
       w.spin.rotation.x = w.angle;
+    }
+
+    // Exhaust flames: flicker in length and width every frame
+    const fl = this.flame;
+    this.flameMat.uniforms.amt.value = fl;
+    this.flameMat.uniforms.time.value += dt;
+    for (const f of this.flames) {
+      f.visible = fl > 0.02;
+      if (f.visible) {
+        const w = 0.8 + Math.random() * 0.6;
+        f.scale.set(w, w, (0.55 + Math.random() * 0.9) * (0.4 + 0.8 * fl));
+      }
     }
 
     // Lights

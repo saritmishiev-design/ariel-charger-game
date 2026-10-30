@@ -122,7 +122,61 @@ const state = {
   lap: 0, lapStart: null, lastLap: null, sector: 0, trackIndex: -1,
   upsideTimer: 0, offroad: false, time: 0,
 };
-const CAM_MODES = ['chase', 'far', 'hood'];
+const CAM_MODES = ['chase', 'cockpit', 'hood'];
+const CAM_LABELS = { chase: 'CHASE', cockpit: 'COCKPIT', hood: 'HOOD' };
+const CAM_NAMES = { chase: 'Chase cam', cockpit: 'Cockpit view', hood: 'Hood / bumper cam' };
+// Eye points in the car body's frame (origin = centre of mass, forward = -Z)
+const COCKPIT_EYE = new THREE.Vector3(-0.36, 0.66, 0.82);   // driver's head, behind the wheel
+const HOOD_EYE = new THREE.Vector3(0, 0.5, -2.0);           // low on the bonnet near the nose
+const COCKPIT_TILT = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.06);
+function setCam(i, announce = true) {
+  state.camMode = ((i % CAM_MODES.length) + CAM_MODES.length) % CAM_MODES.length;
+  camInit = false;
+  const mode = CAM_MODES[state.camMode];
+  $('cam-label').textContent = CAM_LABELS[mode];
+  if (announce) hud.toast(CAM_NAMES[mode], 1.1);
+  settings.cam = state.camMode; saveSettings();
+}
+
+// ---------------- Nitrous ----------------
+const NOS_BURN = 3.5;      // seconds of spray in a full bottle
+const NOS_REFILL = 20;     // seconds to refill from empty
+const nos = { charge: 1, armed: false, spraying: false, idle: 0, fx: 0, spit: 0 };
+function toggleNos() {
+  if (!vehicle.drivetrain.running) { hud.toast('Start the engine first', 1.4); return; }
+  if (!nos.armed && nos.charge < 0.08) { hud.toast('NOS bottle refilling…', 1.4); return; }
+  nos.armed = !nos.armed;
+  haptic(nos.armed ? [20, 30, 20] : 15);
+  if (nos.armed) hud.toast('NOS ARMED — floor it!', 1.3);
+}
+function updateNos(dt, input) {
+  const d = vehicle.drivetrain;
+  nos.spraying = nos.armed && d.running && d.gear > 0 && input.throttle > 0.6;
+  if (nos.spraying) {
+    nos.charge = Math.max(0, nos.charge - dt / NOS_BURN);
+    nos.idle = 0;
+    if (nos.charge === 0) { nos.armed = false; nos.spraying = false; hud.toast('NOS empty', 1.2); }
+  } else if (!nos.armed && (nos.idle += dt) > 1.5) nos.charge = Math.min(1, nos.charge + dt / NOS_REFILL);
+  d.nitrous = nos.spraying ? 1 : 0;
+  nos.fx += ((nos.spraying ? 1 : 0) - nos.fx) * Math.min(1, dt * (nos.spraying ? 7 : 3));
+  // Short flame spits on the limiter / overrun crackle
+  if (d.limiterCut && Math.random() < 0.25) nos.spit = 0.55 + Math.random() * 0.3;
+  nos.spit *= Math.max(0, 1 - dt * 14);
+  car.flame = Math.max(nos.fx, nos.spit);
+  if (nos.spraying && Math.random() < dt * 8) haptic(8);
+}
+let nosUi = '';
+function syncNosUi() {
+  const btn = $('btn-nos');
+  const st = nos.spraying ? 'spraying' : nos.armed ? 'armed' : nos.charge < 0.08 ? 'empty' : 'ready';
+  btn.style.setProperty('--nos', nos.charge.toFixed(3));
+  if (st !== nosUi) {
+    nosUi = st;
+    btn.className = st;
+    $('nos-state').textContent = { spraying: 'BOOST', armed: 'ARMED', empty: 'FILLING', ready: nos.charge > 0.99 ? 'READY' : 'FILLING' }[st];
+  } else if (st === 'ready' && nos.charge > 0.99 && $('nos-state').textContent !== 'READY') $('nos-state').textContent = 'READY';
+  $('speedfx').classList.toggle('on', nos.fx > 0.35);
+}
 
 function placeAtStart() {
   const sp = track.spawn(14);
@@ -169,18 +223,23 @@ function updateCamera(dt) {
   fwd.normalize();
   const mode = CAM_MODES[state.camMode];
   const speed = Math.abs(vehicle.speed);
-  audio.setInterior(mode === 'hood');
-  car.interior.visible = mode !== 'hood';   // the cabin is for the outside views; hood cam looks over it
+  audio.setInterior(mode === 'cockpit');
+  car.interior.visible = mode !== 'hood';   // seats, dash and wheel show in chase and cockpit views
+  const nosFov = nos.fx * 12;                // NOS: the world rushes at you
 
-  if (mode === 'hood') {
-    const eye = new THREE.Vector3(-0.36, 0.64, 0.7).applyQuaternion(car.body.getWorldQuaternion(new THREE.Quaternion())).add(p);
-    camera.position.copy(eye);
+  if (mode !== 'chase') {
     const q = car.body.getWorldQuaternion(new THREE.Quaternion());
+    const eye = (mode === 'cockpit' ? COCKPIT_EYE : HOOD_EYE).clone().applyQuaternion(q).add(p);
+    camera.position.copy(eye);
+    if (mode === 'cockpit') q.multiply(COCKPIT_TILT);
     camera.quaternion.slerp(q, camInit ? 1 - Math.exp(-dt * 18) : 1);
-    camera.fov = 70 + speed * 0.08;
+    const shake = nos.fx * 0.006;
+    camera.position.x += (Math.random() - 0.5) * shake;
+    camera.position.y += (Math.random() - 0.5) * shake;
+    camera.fov = (mode === 'cockpit' ? 66 : 70) + speed * 0.08 + nosFov;
     camInit = true;
   } else {
-    const dist = mode === 'far' ? 10.5 : 6.6, height = mode === 'far' ? 3.4 : 2.0;
+    const dist = 6.6, height = 2.0;
     const desired = new THREE.Vector3().copy(p).addScaledVector(fwd, -dist).add(new THREE.Vector3(0, height, 0));
     const look = new THREE.Vector3().copy(p).addScaledVector(fwd, 4).add(new THREE.Vector3(0, 0.7, 0));
     if (!camInit) { camPos.copy(desired); camLook.copy(look); camInit = true; }
@@ -189,11 +248,11 @@ function updateCamera(dt) {
     if (camPos.y < 0.6) camPos.y = 0.6;
     camera.position.copy(camPos);
     // Engine shake near redline
-    const shake = Math.pow(clamp(vehicle.rpm / 6800, 0, 1), 4) * 0.025 * (vehicle.drivetrain.load + 0.2);
+    const shake = Math.pow(clamp(vehicle.rpm / 6800, 0, 1), 4) * 0.025 * (vehicle.drivetrain.load + 0.2) + nos.fx * 0.03;
     camera.position.x += (Math.random() - 0.5) * shake;
     camera.position.y += (Math.random() - 0.5) * shake;
     camera.lookAt(camLook);
-    camera.fov = 60 + Math.min(18, speed * 0.2);
+    camera.fov = 60 + Math.min(18, speed * 0.2) + nosFov;
   }
   camera.updateProjectionMatrix();
 
@@ -245,7 +304,7 @@ function showLapBanner() {
   el.classList.add('show');
   haptic([30, 60, 30]);
   clearTimeout(bannerTimer);
-  bannerTimer = setTimeout(() => el.classList.remove('show'), 4000);
+  bannerTimer = setTimeout(() => el.classList.remove('show'), 7000);   // matches the 7 s CSS animation
 }
 
 // ---------------- Main loop ----------------
@@ -282,6 +341,7 @@ function frame(now) {
   if (!state.paused) {
     state.time += dt;
     const input = controls.read(dt);
+    updateNos(dt, input);
 
     // Surface under the car
     const b = vehicle.body;
@@ -340,6 +400,7 @@ function frame(now) {
 
     const d = vehicle.drivetrain;
     audio.update({
+      nitrous: nos.fx,
       rpm: d.rpm, load: d.running ? d.load : 0, throttle: d.throttle, running: d.running,
       cut: d.limiterCut, speed: vehicle.speed, scrub, offroad: state.offroad,
       gear: d.gear, shaftRpm: d.wheelW * SPEC.finalDrive * 60 / (2 * Math.PI),
@@ -349,6 +410,8 @@ function frame(now) {
       lapTime: state.lapStart != null ? state.time - state.lapStart : null,
       lastLap: state.lastLap, bestLap, lap: state.lap,
     });
+    updateProgress();
+    syncNosUi();
   }
 
   car.sync(state.paused ? 0 : dt);
@@ -356,6 +419,59 @@ function frame(now) {
   track.update(dt, camera);
   sky.update(dt, camera);
   renderer.render(scene, camera);
+  if (nos.fx > 0.02) speedBlur(nos.fx);
+}
+
+// ---------------- Lap progress ----------------
+let progShown = -1;
+function updateProgress() {
+  const N = track.N;
+  const frac = state.lapStart == null ? 0 : clamp(state.trackIndex / N, 0, 1);
+  const pct = Math.floor(frac * 100);
+  if (Math.abs(frac - progShown) < 0.002) return;
+  progShown = frac;
+  $('prog-fill').style.width = `${(frac * 100).toFixed(1)}%`;
+  $('prog-car').style.left = `${(frac * 100).toFixed(1)}%`;
+  $('prog-pct').textContent = `${pct}%`;
+  const left = (1 - frac) * track.length;
+  $('prog-left').textContent = settings.units === 'mph'
+    ? `${(left / 1609.34).toFixed(2)} MI TO GO` : left >= 1000 ? `${(left / 1000).toFixed(2)} KM TO GO` : `${Math.round(left)} M TO GO`;
+}
+
+// ---------------- NOS speed blur (radial blur of the finished frame) ----------------
+const blur = {
+  tex: null, pos: new THREE.Vector2(0, 0),
+  cam: new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1),
+  scene: new THREE.Scene(),
+  mat: new THREE.ShaderMaterial({
+    depthTest: false, depthWrite: false, toneMapped: false,
+    uniforms: { tFrame: { value: null }, strength: { value: 0 } },
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+    fragmentShader: `uniform sampler2D tFrame; uniform float strength; varying vec2 vUv;
+      void main() {
+        vec2 c = vec2(0.5, 0.47), d = vUv - c;
+        float amt = strength * smoothstep(0.06, 0.55, length(d)) * 0.16;   // sharp centre, streaked edges
+        vec3 acc = vec3(0.0);
+        for (int i = 0; i < 10; i++) acc += texture2D(tFrame, c + d * (1.0 - amt * float(i) / 9.0)).rgb;
+        gl_FragColor = vec4(acc / 10.0, 1.0);
+      }`,
+  }),
+};
+blur.scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), blur.mat));
+function speedBlur(strength) {
+  const w = renderer.domElement.width, h = renderer.domElement.height;
+  if (!blur.tex || blur.tex.image.width !== w || blur.tex.image.height !== h) {
+    if (blur.tex) blur.tex.dispose();
+    blur.tex = new THREE.FramebufferTexture(w, h);
+    blur.tex.minFilter = blur.tex.magFilter = THREE.LinearFilter;
+    blur.mat.uniforms.tFrame.value = blur.tex;
+  }
+  renderer.copyFramebufferToTexture(blur.pos, blur.tex);
+  blur.mat.uniforms.strength.value = strength;
+  const ac = renderer.autoClear;
+  renderer.autoClear = false;
+  renderer.render(blur.scene, blur.cam);
+  renderer.autoClear = ac;
 }
 
 function resize() {
@@ -408,13 +524,13 @@ function buildMenu() {
   $('btn-restart').addEventListener('click', () => {
     placeAtStart(); vehicle.drivetrain.requestGear(0, 0); controls.forceNeutral(); skids.clear();
     state.lap = 0; state.lapStart = null; state.sector = 0; state.lastLap = null;
+    nos.armed = false; nos.charge = 1;
     onGo();
   });
   $('btn-pause').addEventListener('click', () => pause(true));
-  $('btn-cam').addEventListener('click', () => {
-    state.camMode = (state.camMode + 1) % CAM_MODES.length; camInit = false;
-    settings.cam = state.camMode; saveSettings();
-  });
+  $('btn-cam').addEventListener('click', () => setCam(state.camMode + 1));
+  $('btn-nos').addEventListener('pointerdown', (e) => { e.preventDefault(); toggleNos(); });
+  setCam(state.camMode, false);
   $('btn-reset').addEventListener('click', resetCar);
   $('btn-start').addEventListener('click', crank);
   $('btn-center').addEventListener('click', () => { controls.calibrate(); hud.toast('Steering centred', 1.2); });
@@ -489,7 +605,8 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && state.started) pause(!state.paused);
-  if (e.key.toLowerCase() === 'c' && !state.paused) { state.camMode = (state.camMode + 1) % CAM_MODES.length; camInit = false; }
+  if (e.key.toLowerCase() === 'c' && !state.paused) setCam(state.camMode + 1);
+  if (e.key.toLowerCase() === 'x' && !state.paused) toggleNos();
   if (e.key.toLowerCase() === 't' && !state.paused) resetCar();
 });
 // Block page gestures (pinch zoom, pull-to-refresh, long-press menus) while playing
@@ -507,4 +624,4 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
 }
 
 // Debug handle (handy from the browser console)
-window.__game = { vehicle, state, audio, controls, track, camera, car, renderer, smoke };
+window.__game = { vehicle, state, audio, controls, track, camera, car, renderer, smoke, nos };

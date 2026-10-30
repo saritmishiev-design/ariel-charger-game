@@ -25,6 +25,10 @@
       <div class="row big"><span>LAP <b id="lap-no">0</b></span><span id="lap-time">--:--.---</span></div>
       <div class="row"><span>LAST</span><span id="lap-last">--:--.---</span></div>
       <div class="row"><span>BEST</span><span id="lap-best">--:--.---</span></div>
+      <div id="progress" aria-label="Lap progress">
+        <div class="prog-track"><i id="prog-fill"></i><em id="prog-car"></em></div>
+        <div class="row"><span><b id="prog-pct">0%</b> LAP</span><span id="prog-left">-- TO GO</span></div>
+      </div>
     </div>
 
     <div id="cluster">
@@ -38,7 +42,7 @@
 
     <div id="topbtns">
       <button id="btn-center" class="hbtn tilt-only" aria-label="Centre steering">⟳<small>CENTER</small></button>
-      <button id="btn-cam" class="hbtn" aria-label="Camera">◉<small>CAM</small></button>
+      <button id="btn-cam" class="hbtn" aria-label="Switch camera view">◉<small id="cam-label">CHASE</small></button>
       <button id="btn-reset" class="hbtn" aria-label="Reset car">↺<small>RESET</small></button>
       <button id="btn-pause" class="hbtn" aria-label="Pause">❚❚<small>MENU</small></button>
     </div>
@@ -59,6 +63,8 @@
     </div>
 
     <div id="touchwheel"><div class="track"></div><div class="thumb"></div><span>◀ STEER ▶</span></div>
+
+    <button id="btn-nos" aria-label="Nitrous boost"><span>NOS</span><small id="nos-state">READY</small></button>
 
     <div class="pedal-group right">
       <div id="shifter">
@@ -137,12 +143,14 @@
           <li>Pedals are analog: touch near the top to feather, lower for full.</li>
           <li>700 hp through skinny '70s tyres — be gentle with the throttle out of corners or the rear will step out.</li>
           <li>Stalled? Clutch in (or neutral) and tap <b>START</b>.</li>
-          <li>Keyboard: W/S/A/D or arrows · Space = clutch · 1-5, R, N · I = ignition · C = camera · T = reset · Esc = menu.</li>
+          <li><b>NOS:</b> tap to arm, then floor the GAS — it sprays while you're at full throttle and refills over time.</li>
+          <li>Keyboard: W/S/A/D or arrows · Space = clutch · 1-5, R, N · I = ignition · C = camera · X = NOS · T = reset · Esc = menu.</li>
         </ul>
       </details>
     </div>
   </div>
 
+  <div id="speedfx"></div>
   <div id="rotate"><div>↻</div><p>Turn your phone sideways</p></div>
   <div id="loading"><div class="spin"></div><p>Warming up the Hemi…</p></div>
 
