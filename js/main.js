@@ -1,6 +1,6 @@
 import * as THREE from '../vendor/three.module.min.js';
 import * as CANNON from '../vendor/cannon-es.js';
-import { SPEC, PHYSICS_DT, WALL_CONTACT } from './config.js';
+import { SPEC, PHYSICS_DT, WALL_CONTACT, BUILD } from './config.js';
 import { Vehicle } from './vehicle.js';
 import { CarModel, PAINTS } from './carModel.js';
 import { Track, ROAD_HALF } from './track.js';
@@ -14,10 +14,10 @@ const $ = (id) => document.getElementById(id);
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 
 // ---------------- Settings ----------------
-const DEFAULTS = { units: 'kmh', steer: 'tilt', tilt: 40, tcs: true, auto: false, paint: 'red', volume: 0.9, cam: 0, gfx: 'high', tiltV: 4 };
+const DEFAULTS = { units: 'kmh', steer: 'tilt', tilt: 32, tcs: true, auto: false, paint: 'red', volume: 0.9, cam: 0, gfx: 'high', tiltV: 5 };
 let settings = { ...DEFAULTS };
 try { settings = { ...DEFAULTS, ...JSON.parse(localStorage.getItem('charger.settings') || '{}') }; } catch (e) { /* private mode */ }
-// Tilt calibration changed (v4 sweet spot): move any saved value onto the new scale once
+// Tilt calibration changed (v5): move any saved value onto the new scale once
 if (settings.tiltV !== DEFAULTS.tiltV) { settings.tilt = DEFAULTS.tilt; settings.tiltV = DEFAULTS.tiltV; }
 const saveSettings = () => { try { localStorage.setItem('charger.settings', JSON.stringify(settings)); } catch (e) { /* ignore */ } };
 let bestLap = null;
@@ -621,8 +621,22 @@ $('loading').classList.add('hide');
 
 // ---------------- PWA ----------------
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
+  // When a new version takes over, reload once (only if an older one was running and we're in the menu)
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloaded) return;
+    reloaded = true;
+    if (!state.started || state.paused) location.reload();
+  });
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').then((reg) => {
+      reg.update().catch(() => {});
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
+    }).catch(() => {});
+  });
 }
+$('build').textContent = `BUILD ${BUILD}`;
 
 // Debug handle (handy from the browser console)
 window.__game = { vehicle, state, audio, controls, track, camera, car, renderer, smoke, nos };

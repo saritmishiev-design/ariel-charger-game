@@ -281,6 +281,8 @@ h1 span {
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
 #menu-sub { margin: 4px 0 0; color: var(--muted); font-size: 11px; letter-spacing: 3px; }
+#build { margin: 2px 0 0; color: rgba(255, 255, 255, 0.35); font-size: 9px; letter-spacing: 2px; }
+#menu.paused #build { display: none; }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px 14px; }
 .setting label { display: block; font-size: 11px; color: var(--muted); letter-spacing: 1px; margin-bottom: 5px; text-transform: uppercase; }

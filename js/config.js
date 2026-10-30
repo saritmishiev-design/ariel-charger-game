@@ -21,7 +21,7 @@ export const SPEC = {
   wheelRadius: 0.343,
   tyreWidthFront: 0.225,
   tyreWidthRear: 0.275,
-  tyreMu: 1.1,               // sticky street/strip radials
+  tyreMu: 1.2,               // sticky street/strip radials
 
   // Suspension (soft '70s muscle car)
   suspensionRestLength: 0.32,
@@ -33,8 +33,8 @@ export const SPEC = {
   // angles, so the axle that lets go first decides the balance. Rear-first (the old 1.08 / 1.00)
   // meant built-in oversteer and a yaw that kept growing at speed; front-first = stable understeer.
   // Power oversteer still comes from wheelspin eating rear grip (see vehicle.js).
-  frictionSlipFront: 1.0,
-  frictionSlipRear: 1.22,
+  frictionSlipFront: 1.15,
+  frictionSlipRear: 1.25,
 
   // Engine — 7.2L Hemi, built to 700 hp @ 6200 rpm
   idleRpm: 850,
@@ -66,11 +66,14 @@ export const SPEC = {
   rollingResistance: 0.013,
 
   // Steering
-  maxSteer: 0.60,            // ~34° lock at the road wheel
-  steerSpeedFalloff: 18,     // m/s at which available lock halves
+  maxSteer: 0.70,            // ~40° lock at the road wheel
+  steerSpeedFalloff: 24,     // m/s at which available lock halves
 };
 
 export const PHYSICS_DT = 1 / 120;
+
+// Shown in the menu so it's easy to confirm which version a phone is running (sw.js VERSION matches).
+export const BUILD = 9;
 
 // Car body vs barriers: frictionless and barely bouncy, so the car glances off and slides along
 // the wall instead of snagging, spinning round or stopping dead.

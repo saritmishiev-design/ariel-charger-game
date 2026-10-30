@@ -124,15 +124,15 @@ export class Vehicle {
     this.speed = v;
 
     // --- Steering: speed-sensitive lock + rate limit, Ackermann geometry.
-    // At speed, full lock is capped near what the tyres can actually hold (≈1.7× the angle for
-    // limit cornering), so a big steering input can't throw the car into a spin. While sliding,
-    // extra lock is released for counter-steer.
+    // At speed, full lock is capped at ~3× the angle for limit cornering: enough to bite hard and
+    // scrub speed into a hairpin, not enough to throw the car into a spin. While sliding, extra
+    // lock is released for counter-steer.
     const vv = Math.max(Math.abs(v), 1);
-    const gripLock = 1.7 * s.wheelbase * s.tyreMu * this.surfaceMu * 9.81 / (vv * vv);
+    const gripLock = 3.0 * s.wheelbase * s.tyreMu * this.surfaceMu * 9.81 / (vv * vv);
     // Counter-steer = steering toward where the car is actually travelling (+ steer is left, + vLat is right)
     const counter = input.steer * vLat < 0 && Math.abs(v) > 4;
     const counterRoom = counter ? Math.min(0.3, Math.atan2(Math.abs(vLat), Math.abs(v))) : 0;
-    const lock = Math.min(s.maxSteer / (1 + (v / s.steerSpeedFalloff) ** 2), Math.max(0.025, gripLock)) + counterRoom;
+    const lock = Math.min(s.maxSteer / (1 + (v / s.steerSpeedFalloff) ** 2), Math.max(0.04, gripLock)) + counterRoom;
     const target = clamp(input.steer, -1, 1) * lock;
     const rate = 2.4 * dt;
     this.steer += clamp(target - this.steer, -rate, rate);
@@ -148,6 +148,19 @@ export class Vehicle {
     } else {
       this.vehicle.setSteeringValue(0, 0);
       this.vehicle.setSteeringValue(0, 1);
+    }
+
+    // Turn-in assist: when the car is turning less than the front wheels ask for (understeer),
+    // help the nose rotate toward that yaw rate. Capped at a 1.6 g-equivalent rate and never
+    // pushes past the request, so it can't spin the car; it switches off while sliding.
+    if (Math.abs(v) > 4 && Math.abs(d) > 0.01 && this.rearLoose < 0.15) {
+      const want = v * Math.tan(d) / s.wheelbase;
+      const cap = 1.6 * 9.81 / Math.abs(v);
+      const target = clamp(want, -cap, cap);
+      const yaw = b.angularVelocity.y;
+      if (Math.sign(target) === Math.sign(want) && Math.abs(yaw) < Math.abs(target) && Math.sign(yaw || target) === Math.sign(target)) {
+        b.angularVelocity.y += (target - yaw) * Math.min(1, dt * 3.5);
+      }
     }
 
     // --- Drivetrain → rear tyres

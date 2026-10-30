@@ -1,6 +1,6 @@
 // Service worker: precache everything so the game runs offline from the home screen.
 // Bump VERSION whenever files change to roll out an update.
-const VERSION = 'charger-v8';
+const VERSION = 'charger-v9';   // keep in step with BUILD in js/config.js
 const ASSETS = [
   './',
   './index.html',
@@ -31,7 +31,7 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(ASSETS.map((u) => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
@@ -42,21 +42,26 @@ self.addEventListener('activate', (e) => {
   );
 });
 
-// Stale-while-revalidate: instant load from cache, refresh in the background.
+// Network-first: always try for the latest files (bypassing the browser's HTTP cache, which on
+// GitHub Pages holds files for 10 minutes), so an update shows up on the very next launch.
+// Offline or on a very slow connection, fall back to the precached copy.
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
-  e.respondWith(
-    caches.open(VERSION).then(async (cache) => {
+  e.respondWith((async () => {
+    const cache = await caches.open(VERSION);
+    try {
+      const res = await Promise.race([
+        fetch(req, { cache: 'no-cache' }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('slow')), 4000)),
+      ]);
+      if (res.ok) cache.put(req, res.clone());
+      return res;
+    } catch (err) {
       const cached = await cache.match(req, { ignoreSearch: true });
-      const network = fetch(req)
-        .then((res) => { if (res.ok) cache.put(req, res.clone()); return res; })
-        .catch(() => null);
-      if (cached) { e.waitUntil(network); return cached; }
-      const res = await network;
-      if (res) return res;
-      if (req.mode === 'navigate') return cache.match('./index.html');
+      if (cached) return cached;
+      if (req.mode === 'navigate') return (await cache.match('./index.html')) || Response.error();
       return Response.error();
-    }),
-  );
+    }
+  })());
 });

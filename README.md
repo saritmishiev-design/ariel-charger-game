@@ -16,8 +16,8 @@ A mobile-first, physics-based 3D driving game (PWA). A 1979 Dodge Charger with a
 - **Physics:** cannon-es raycast vehicle, fixed 120 Hz step, aero drag, rolling resistance, grass/verge grip,
   stable (slightly understeering) grip balance, frictionless barriers the car slides along, anti-stall after impacts.
 - **Controls:** analog GAS / BRAKE / CLUTCH pedals, draggable H-pattern Hurst shifter (or tap a gear), gyro steering
-  (DeviceOrientation, either landscape direction, ±5° deadzone, progressive curve to full lock at 40°, smoothing and a
-  ~0.9 s turn-in rate (a comfortable 20-25° tilt takes the tightest hairpin); at speed the lock is capped near the tyres' grip so big inputs can't spin the car), touch-slider fallback, haptics.
+  (DeviceOrientation, either landscape direction, ±4° deadzone, progressive curve to full lock at 32°, light smoothing,
+  turn-in assist; a comfortable 15° tilt takes the tightest hairpin; at speed the lock is capped near the tyres' grip so big inputs can't spin the car), touch-slider fallback, haptics.
 - **Audio (Web Audio + AudioWorklet):** 8 combustion pulses per cycle in Hemi firing order 1-8-4-3-6-5-7-2 feeding two
   deliberately mismatched exhaust banks (level, pulse shape, pipe resonance, path delay) so the uneven cross-plane
   rhythm survives a mono phone speaker, throat formants, asymmetric saturation, pipe waveguides, load-dependent muffler, saturation, big-cam idle lope,
@@ -68,6 +68,7 @@ vendor/                        three.js r160, cannon-es 0.20 (MIT)
 manifest.json, sw.js, icons/   PWA
 tools/make-icons.mjs           regenerates the PNG icons
 ```
-When you change files, bump `VERSION` in `sw.js` so installed copies update.
+When you change files, bump `VERSION` in `sw.js` and `BUILD` in `js/config.js`. The service worker is network-first,
+so installed copies pick up a new build on the next launch; the build number shows under the menu title.
 
 **iPhone tip:** if there's no sound, flip the ring/silent switch off (iOS mutes web audio in silent mode on older versions).

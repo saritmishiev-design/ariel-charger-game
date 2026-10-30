@@ -227,11 +227,11 @@ export function billboardTexture(kind) {
     ctx.fillStyle = '#ffe414'; ctx.fillRect(0, 0, w, h);
     ctx.strokeStyle = '#111'; ctx.lineWidth = 14; ctx.strokeRect(14, 14, w - 28, h - 28);
     ctx.fillStyle = '#111';
-    fitText(ctx, 'Enjoy the 700HP!', w - 120, 58, 'italic 800');
-    ctx.fillText('Enjoy the 700HP!', w / 2, 66);
-    ctx.fillRect(w / 2 - 170, 104, 340, 5);
+    fitText(ctx, 'Enjoy the 700HP!', w - 120, 46, 'italic 800');
+    ctx.fillText('Enjoy the 700HP!', w / 2, 58);
+    ctx.fillRect(w / 2 - 150, 88, 300, 4);
     const punch = ['But don\'t forget', 'you drive a', 'Nissan Sentra', 'in real life.'];
-    const ys = [158, 248, 348, 440], sizes = [92, 92, 112, 92];
+    const ys = [150, 246, 350, 448], sizes = [98, 98, 120, 98];
     punch.forEach((line, i) => {
       fitText(ctx, line, w - 70, sizes[i], '900');
       ctx.fillText(line, w / 2, ys[i]);
