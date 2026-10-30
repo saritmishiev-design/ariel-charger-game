@@ -1,13 +1,16 @@
 // Procedural 1979 Dodge Charger body — built in the chassis frame (origin = CoM, forward = -Z).
 import * as THREE from '../vendor/three.module.min.js';
+import { rng, flakeNormalMap, contactShadowTexture } from './textures.js';
+import { mergeByMaterial } from './merge.js';
 
+// metal = metallic-flake content of the base coat (solid colours are low)
 export const PAINTS = {
-  red: { name: 'Charger Red', color: 0x7a0910 },
-  black: { name: 'Tuxedo Black', color: 0x0c0c0f },
-  orange: { name: 'Hemi Orange', color: 0xe0530d },
-  green: { name: 'Sublime', color: 0x58b51c },
-  blue: { name: 'B5 Blue', color: 0x1f5fb8 },
-  white: { name: 'Bright White', color: 0xe8e8e4 },
+  red: { name: 'Charger Red', color: 0x8e0a12, metal: 0.18, rough: 0.4 },
+  black: { name: 'Tuxedo Black', color: 0x0a0a0d, metal: 0.25, rough: 0.22 },
+  orange: { name: 'Hemi Orange', color: 0xe0530d, metal: 0.15, rough: 0.38 },
+  green: { name: 'Sublime', color: 0x58b51c, metal: 0.15, rough: 0.38 },
+  blue: { name: 'B5 Blue', color: 0x1f5fb8, metal: 0.6, rough: 0.32 },
+  white: { name: 'Bright White', color: 0xe8e8e4, metal: 0.05, rough: 0.4 },
 };
 
 function extrudeProfile(points, depth, bevel) {
@@ -42,24 +45,29 @@ export class CarModel {
     this.body = new THREE.Group();     // visual pitch/roll on top
     this.root.add(this.body);
 
+    // Two-layer automotive paint: flaked metallic base coat under a glossy clear coat
     this.paint = new THREE.MeshPhysicalMaterial({
-      color: PAINTS.red.color, metalness: 0.3, roughness: 0.4, clearcoat: 1, clearcoatRoughness: 0.06, envMap,
-      envMapIntensity: 0.55,
+      color: PAINTS.red.color, metalness: 0.55, roughness: 0.34,
+      normalMap: flakeNormalMap(rng(77)), normalScale: new THREE.Vector2(0.35, 0.35),
+      clearcoat: 1, clearcoatRoughness: 0.025, envMap, envMapIntensity: 0.8,
     });
-    const chrome = new THREE.MeshStandardMaterial({ color: 0xe8e8ea, metalness: 1, roughness: 0.12, envMap });
-    const black = new THREE.MeshStandardMaterial({ color: 0x0b0b0c, roughness: 0.75, metalness: 0.2 });
-    const vinyl = new THREE.MeshStandardMaterial({ color: 0x111112, roughness: 0.9 });
-    const glass = new THREE.MeshStandardMaterial({
-      color: 0x0d141c, metalness: 0.9, roughness: 0.05, envMap, envMapIntensity: 1.4,
+    const chrome = new THREE.MeshPhysicalMaterial({ color: 0xf2f2f4, metalness: 1, roughness: 0.06, envMap, envMapIntensity: 1.2 });
+    const black = new THREE.MeshStandardMaterial({ color: 0x0b0b0c, roughness: 0.6, metalness: 0.2, envMap });
+    const vinyl = new THREE.MeshPhysicalMaterial({ color: 0x0e0e0f, roughness: 0.75, sheen: 0.4, sheenRoughness: 0.6, envMap });
+    // Tinted safety glass: a dielectric with Fresnel reflections, see-through to the cabin
+    const glass = new THREE.MeshPhysicalMaterial({
+      color: 0x0b1116, metalness: 0, roughness: 0.02, ior: 1.52, specularIntensity: 1, envMap, envMapIntensity: 1.6,
+      transparent: true, opacity: 0.84, depthWrite: false,
     });
-    this.tailMat = new THREE.MeshStandardMaterial({ color: 0x5a0000, emissive: 0xff1010, emissiveIntensity: 0.35, roughness: 0.3 });
-    this.reverseMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, emissive: 0xffffff, emissiveIntensity: 0, roughness: 0.3 });
-    const headMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff4d6, emissiveIntensity: 0.9 });
+    this.tailMat = new THREE.MeshPhysicalMaterial({ color: 0x5a0000, emissive: 0xff1010, emissiveIntensity: 0.35, roughness: 0.15, clearcoat: 1, envMap });
+    this.reverseMat = new THREE.MeshPhysicalMaterial({ color: 0xcccccc, emissive: 0xffffff, emissiveIntensity: 0, roughness: 0.15, clearcoat: 1, envMap });
+    const headMat = new THREE.MeshPhysicalMaterial({ color: 0xffffff, emissive: 0xfff4d6, emissiveIntensity: 0.9, roughness: 0.1, clearcoat: 1, envMap });
 
     const add = (geo, mat, x = 0, y = 0, z = 0, cast = true) => {
       const m = new THREE.Mesh(geo, mat);
       m.position.set(x, y, z);
       m.castShadow = cast;
+      m.receiveShadow = true;
       this.body.add(m);
       return m;
     };
@@ -76,9 +84,29 @@ export class CarModel {
     ];
     add(extrudeProfile(lower, spec.width, 0.07), this.paint);
 
+    // ---- Cabin interior (seen through the glass): seats, headrests, dash, rear deck
+    const trim = new THREE.MeshStandardMaterial({ color: 0x1a1512, roughness: 0.85 });
+    this.interior = new THREE.Group();
+    this.body.add(this.interior);
+    const inside = (geo, x, y, z) => { const m = new THREE.Mesh(geo, trim); m.position.set(x, y, z); this.interior.add(m); return m; };
+    for (const s of [-1, 1]) {
+      inside(new THREE.BoxGeometry(0.5, 0.12, 0.5), s * 0.36, Y(0.62), 0.78);
+      const back = inside(new THREE.BoxGeometry(0.5, 0.62, 0.12), s * 0.36, Y(0.95), 1.06);
+      back.rotation.x = -0.22;
+      inside(new THREE.BoxGeometry(0.26, 0.2, 0.1), s * 0.36, Y(1.32), 1.13);
+    }
+    inside(new THREE.BoxGeometry(1.4, 0.4, 0.55), 0, Y(1.0), 1.55);           // rear seat back
+    inside(new THREE.BoxGeometry(1.5, 0.12, 0.42), 0, Y(0.95), -0.02);        // dashboard
+    inside(new THREE.BoxGeometry(1.5, 0.05, 0.6), 0, Y(0.96), 1.78);          // parcel shelf
+    const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.19, 0.022, 8, 24), trim);
+    wheel.position.set(-0.36, Y(1.02), 0.25); wheel.rotation.x = -1.1;
+    this.interior.add(wheel);
+
     // ---- Greenhouse (glass) + formal roof
     const cabinW = 1.5;
-    add(extrudeProfile([[-0.12, Y(0.92)], [0.66, Y(1.33)], [1.32, Y(1.345)], [1.98, Y(0.94)]], cabinW, 0.03), glass);
+    const greenhouse = add(extrudeProfile([[-0.12, Y(0.92)], [0.66, Y(1.33)], [1.32, Y(1.345)], [1.98, Y(0.94)]], cabinW, 0.03), glass);
+    greenhouse.castShadow = true;
+    greenhouse.renderOrder = 2;
     // Body-coloured wide C-pillars (opera-window look)
     add(extrudeProfile([[1.15, Y(1.345)], [1.33, Y(1.352)], [1.99, Y(0.945)], [1.42, Y(0.945)]], cabinW + 0.04, 0.02), this.paint);
     // Landau vinyl roof
@@ -134,10 +162,10 @@ export class CarModel {
 
     // ---- Wheels (Magnum 500 style), placed by physics each frame
     this.wheels = [];
-    const tyreMat = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.92 });
-    const wallMat = new THREE.MeshStandardMaterial({ color: 0x1d1d1d, roughness: 0.85 });
-    const rimMat = new THREE.MeshStandardMaterial({ color: 0xc9cacc, metalness: 1, roughness: 0.22, envMap });
-    const capMat = new THREE.MeshStandardMaterial({ color: 0x8b0000, metalness: 0.6, roughness: 0.3 });
+    const tyreMat = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.88, envMap, envMapIntensity: 0.4 });
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0x1b1b1b, roughness: 0.8, envMap, envMapIntensity: 0.4 });
+    const rimMat = new THREE.MeshStandardMaterial({ color: 0xd4d5d8, metalness: 1, roughness: 0.16, envMap });
+    const capMat = new THREE.MeshPhysicalMaterial({ color: 0x8b0000, metalness: 0.6, roughness: 0.3, clearcoat: 1, envMap });
     for (let i = 0; i < 4; i++) {
       const rear = i >= 2;
       const w = rear ? spec.tyreWidthRear : spec.tyreWidthFront;
@@ -175,9 +203,21 @@ export class CarModel {
       dish.rotation.y = side * Math.PI / 2;
       dish.position.x = face;
       spin.add(dish);
+      mergeByMaterial(spin);
       this.root.add(outer);
       this.wheels.push({ outer, spin, angle: 0 });
     }
+    mergeByMaterial(this.body);
+    mergeByMaterial(this.interior);
+
+    // Soft contact shadow / ambient occlusion on the ground under the car (added to the scene by main)
+    this.contact = new THREE.Mesh(
+      new THREE.PlaneGeometry(spec.width + 0.7, spec.length + 0.9).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ map: contactShadowTexture(), transparent: true, depthWrite: false, opacity: 0.9,
+        polygonOffset: true, polygonOffsetFactor: -4, color: 0x000000 }),
+    );
+    this.contact.renderOrder = 1;
+    this.contactCenterZ = (zF + zR) / 2;
 
     // Visual suspension feel
     this.pitch = 0;
@@ -191,6 +231,8 @@ export class CarModel {
   setPaint(key) {
     const p = PAINTS[key] || PAINTS.red;
     this.paint.color.setHex(p.color);
+    this.paint.metalness = p.metal;
+    this.paint.roughness = p.rough;
   }
 
   sync(dt) {
@@ -198,6 +240,15 @@ export class CarModel {
     this.root.position.set(b.position.x, b.position.y, b.position.z);
     this.root.quaternion.set(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w);
     this.root.updateMatrixWorld();
+
+    // Contact shadow follows yaw, stays flat on the road and fades as the car leaves the ground
+    const yaw = Math.atan2(2 * (b.quaternion.x * b.quaternion.z + b.quaternion.w * b.quaternion.y),
+      1 - 2 * (b.quaternion.x * b.quaternion.x + b.quaternion.y * b.quaternion.y));
+    const cz = this.contactCenterZ;
+    this.contact.position.set(b.position.x + Math.sin(yaw) * cz, 0.035, b.position.z + Math.cos(yaw) * cz);
+    this.contact.rotation.y = yaw;
+    const air = Math.max(0, b.position.y - this.vehicle.spec.cgHeight);
+    this.contact.material.opacity = 0.9 * Math.max(0, 1 - air * 1.5);
 
     // Body pitch / roll from local acceleration (exaggerates weight transfer)
     if (dt > 0) {

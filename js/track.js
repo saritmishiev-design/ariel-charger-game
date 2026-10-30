@@ -1,6 +1,9 @@
 // Closed circuit: road ribbon, curbs, barriers (visual + physics), scenery.
 import * as THREE from '../vendor/three.module.min.js';
 import * as CANNON from '../vendor/cannon-es.js';
+import { rng, asphaltTextures, skidTexture, grassTextures } from './textures.js';
+import { mergeByMaterial } from './merge.js';
+import { buildTrees, buildGrassTufts, buildMountains, buildBillboards, windUniforms, updateLOD } from './scenery.js';
 
 // "Ariel Raceway" — 3.6 km: long main straight, fast sweepers, a tight chicane,
 // a long back straight, a heavy-braking hairpin, esses and a final hairpin.
@@ -16,11 +19,6 @@ export const ROAD_HALF = 7;
 const CURB_W = 1.3;
 const WALL_OFFSET = 16;
 const SPACING = 2;
-
-function rng(seed) {
-  let s = seed >>> 0;
-  return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
-}
 
 function canvasTexture(w, h, draw, repeatX = 1, repeatY = 1) {
   const c = document.createElement('canvas');
@@ -45,7 +43,7 @@ function noiseFill(ctx, w, h, base, spread, rand, dots = 9000) {
 }
 
 export class Track {
-  constructor(scene, world, materials) {
+  constructor(scene, world, materials, quality = 'high') {
     this.scene = scene;
     const curve = new THREE.CatmullRomCurve3(LAYOUT.map(([x, z]) => new THREE.Vector3(x, 0, z)), true, 'centripetal');
     this.curve = curve;
@@ -81,7 +79,18 @@ export class Track {
     this.buildWalls(world, materials);
     this.buildStartLine();
     this.buildScenery();
-    this.buildSky();
+    this.billboards = buildBillboards(this, this.group);
+    buildTrees(this, this.group, this.rand, quality, this.billboards.spots);
+    buildGrassTufts(this, this.group, this.rand, quality);
+    buildMountains(this.group, this.rand);
+    this.time = 0;
+  }
+
+  update(dt, camera) {
+    this.time += dt;
+    windUniforms.uTime.value = this.time;
+    this.billboards.update(dt, this.time);
+    updateLOD(camera.position);
   }
 
   /** Spawn transform: on the grid a little behind the start line. */
@@ -117,18 +126,21 @@ export class Track {
   }
 
   buildGround() {
-    const tex = canvasTexture(256, 256, (ctx, w, h) => {
-      noiseFill(ctx, w, h, '#3f6b2a', 0.22, this.rand, 14000);
-      for (let i = 0; i < 400; i++) {
-        ctx.fillStyle = `rgba(${90 + this.rand() * 40},${120 + this.rand() * 40},40,0.35)`;
-        ctx.fillRect(this.rand() * w, this.rand() * h, 1, 3 + this.rand() * 4);
-      }
-    }, 220, 220);
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(5000, 5000),
-      new THREE.MeshLambertMaterial({ map: tex }),
-    );
+    const { map, macro } = grassTextures(this.rand);
+    map.repeat.set(260, 260);
+    const mat = new THREE.MeshStandardMaterial({ map, roughness: 0.95, metalness: 0, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 2 });
+    // Break up tiling with two layers of low-frequency colour variation
+    mat.onBeforeCompile = (sh) => {
+      sh.uniforms.macroMap = { value: macro };
+      sh.fragmentShader = 'uniform sampler2D macroMap;\n' + sh.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+        vec3 macA = texture2D(macroMap, vMapUv * 0.0371).rgb;
+        vec3 macB = texture2D(macroMap, vMapUv * 0.0083 + 0.31).rgb;
+        diffuseColor.rgb *= macA * macB * 1.6;`);
+    };
+    // Subdivided: one giant triangle pair loses depth precision against the road on many GPUs
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(5000, 5000, 64, 64), mat);
     ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.03;
     ground.receiveShadow = true;
     this.group.add(ground);
   }
@@ -143,7 +155,11 @@ export class Track {
       const p = this.points[k], r = this.rights[k];
       pos.push(p.x + r.x * offsetA, y, p.z + r.z * offsetA, p.x + r.x * offsetB, y, p.z + r.z * offsetB);
       uv.push(0, dist / vScale, 1, dist / vScale);
-      if (i > 0 && (!mask || mask(k))) idx.push(vi - 2, vi, vi - 1, vi - 1, vi, vi + 1);
+      if (i > 0 && (!mask || mask(k))) {
+        // Wind counter-clockwise seen from above so the strip faces up
+        if (offsetA < offsetB) idx.push(vi - 2, vi - 1, vi, vi - 1, vi + 1, vi);
+        else idx.push(vi - 2, vi, vi - 1, vi - 1, vi, vi + 1);
+      }
       vi += 2;
       dist += this.ds;
     }
@@ -156,33 +172,38 @@ export class Track {
   }
 
   buildRoad() {
-    const tex = canvasTexture(256, 256, (ctx, w, h) => {
-      noiseFill(ctx, w, h, '#3a3b3e', 0.25, this.rand, 16000);
-      // patches & tyre-rubber lines
-      for (let i = 0; i < 30; i++) {
-        ctx.fillStyle = `rgba(20,20,22,${0.05 + this.rand() * 0.1})`;
-        ctx.fillRect(this.rand() * w, this.rand() * h, 10 + this.rand() * 40, 10 + this.rand() * 60);
-      }
-      ctx.fillStyle = 'rgba(15,15,15,0.25)';
-      ctx.fillRect(w * 0.3, 0, w * 0.08, h);
-      ctx.fillRect(w * 0.62, 0, w * 0.08, h);
-      ctx.fillStyle = '#e8e8e2';
-      const line = Math.round(w * 0.012);
-      ctx.fillRect(line * 1.5, 0, line, h);
-      ctx.fillRect(w - line * 2.5, 0, line, h);
-    });
+    const tex = asphaltTextures(this.rand);
     const road = new THREE.Mesh(
       this.ribbon(-ROAD_HALF, ROAD_HALF, 0.02, ROAD_HALF * 2),
-      new THREE.MeshLambertMaterial({ map: tex }),
+      new THREE.MeshStandardMaterial({
+        map: tex.map, roughnessMap: tex.roughnessMap, bumpMap: tex.bumpMap, bumpScale: 1.2, roughness: 1, metalness: 0,
+        envMapIntensity: 0.7,
+      }),
     );
     road.receiveShadow = true;
     this.group.add(road);
 
-    // Run-off: lighter dusty verge just outside the curbs
-    const verge = new THREE.MeshLambertMaterial({ color: 0x8a8068 });
+    // Rubber laid down in the braking zones before every real corner
+    const N = this.N, brake = new Uint8Array(N), TH = 1 / 160;
+    for (let i = 0; i < N; i++) {
+      const c = Math.abs(this.curvature[i]) > TH, p = Math.abs(this.curvature[(i - 1 + N) % N]) > TH;
+      if (c && !p) for (let k = -70; k <= 12; k++) brake[(i + k + N) % N] = 1;
+    }
+    const skid = new THREE.Mesh(
+      this.ribbon(-ROAD_HALF + 0.6, ROAD_HALF - 0.6, 0.026, 44, (k) => brake[k]),
+      new THREE.MeshStandardMaterial({
+        map: skidTexture(this.rand), transparent: true, depthWrite: false, roughness: 0.75,
+        polygonOffset: true, polygonOffsetFactor: -2,
+      }),
+    );
+    skid.receiveShadow = true;
+    this.group.add(skid);
+
+    // Run-off: dusty gravel verge just outside the curbs
+    const gravel = canvasTexture(128, 128, (ctx, w, h) => noiseFill(ctx, w, h, '#8f8670', 0.35, this.rand, 9000), 1, 1);
+    const verge = new THREE.MeshStandardMaterial({ map: gravel, roughness: 1 });
     for (const s of [-1, 1]) {
-      const m = new THREE.Mesh(this.ribbon(s * (ROAD_HALF + CURB_W), s * (ROAD_HALF + CURB_W + 2.2), 0.012, 10), verge);
-      m.material.side = THREE.DoubleSide;
+      const m = new THREE.Mesh(this.ribbon(s * (ROAD_HALF + CURB_W), s * (ROAD_HALF + CURB_W + 2.2), 0.012, 4), verge);
       m.receiveShadow = true;
       this.group.add(m);
     }
@@ -217,7 +238,7 @@ export class Track {
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
     g.computeVertexNormals();
-    const m = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
+    const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.6 }));
     m.receiveShadow = true;
     this.group.add(m);
   }
@@ -253,7 +274,7 @@ export class Track {
       }
     }
     const geo = new THREE.BoxGeometry(1, 1, 1);
-    const mat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5, metalness: 0.1 });
     const inst = new THREE.InstancedMesh(geo, mat, transforms.length);
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), ps = new THREE.Vector3();
     const up = new THREE.Vector3(0, 1, 0);
@@ -291,7 +312,7 @@ export class Track {
     });
     const p = this.points[0], t = this.tangents[0];
     const heading = Math.atan2(t.x, t.z);
-    const line = new THREE.Mesh(new THREE.PlaneGeometry(ROAD_HALF * 2, 1.6), new THREE.MeshLambertMaterial({ map: tex }));
+    const line = new THREE.Mesh(new THREE.PlaneGeometry(ROAD_HALF * 2, 1.6), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.7 }));
     line.rotation.order = 'YXZ';
     line.rotation.set(-Math.PI / 2, heading, 0);
     line.position.set(p.x, 0.03, p.z);
@@ -299,7 +320,7 @@ export class Track {
 
     // Gantry
     const g = new THREE.Group();
-    const metal = new THREE.MeshLambertMaterial({ color: 0x2b2d33 });
+    const metal = new THREE.MeshStandardMaterial({ color: 0x2b2d33, metalness: 0.7, roughness: 0.4 });
     for (const s of [-1, 1]) {
       const post = new THREE.Mesh(new THREE.BoxGeometry(0.6, 7, 0.6), metal);
       post.position.set(s * (ROAD_HALF + 2.5), 3.5, 0);
@@ -338,9 +359,9 @@ export class Track {
         ctx.fillRect(i * 4 + 0.5, row * 8, 2, 2);
       }
     }, 6, 1);
-    const standMat = new THREE.MeshLambertMaterial({ map: crowd });
-    const concrete = new THREE.MeshLambertMaterial({ color: 0x9a9a96 });
-    const roofMat = new THREE.MeshLambertMaterial({ color: 0xd8dadf });
+    const standMat = new THREE.MeshStandardMaterial({ map: crowd, roughness: 0.9 });
+    const concrete = new THREE.MeshStandardMaterial({ color: 0x9a9a96, roughness: 0.92 });
+    const roofMat = new THREE.MeshStandardMaterial({ color: 0xd8dadf, roughness: 0.4, metalness: 0.6 });
     const placeAlong = (index, side, dist, obj) => {
       const p = this.points[index], r = this.rights[index], t = this.tangents[index];
       obj.position.set(p.x + r.x * side * dist, 0, p.z + r.z * side * dist);
@@ -366,7 +387,8 @@ export class Track {
       roof.rotation.z = -0.06;
       roof.castShadow = true;
       g.add(roof);
-      g.traverse(o => { if (o.isMesh) o.receiveShadow = true; });
+      g.traverse(o => { if (o.isMesh) { o.receiveShadow = true; o.castShadow = true; } });
+      mergeByMaterial(g);
       return g;
     };
     const idx = (x) => this.query(x, 0).index;
@@ -383,7 +405,7 @@ export class Track {
       }
     }, 4, 1);
     const pit = new THREE.Mesh(new THREE.BoxGeometry(6, 5, 240), [
-      new THREE.MeshLambertMaterial({ map: pitTex }), new THREE.MeshLambertMaterial({ map: pitTex }),
+      new THREE.MeshStandardMaterial({ map: pitTex, roughness: 0.3 }), new THREE.MeshStandardMaterial({ map: pitTex, roughness: 0.3 }),
       roofMat, concrete, concrete, concrete,
     ]);
     pit.position.y = 2.5;
@@ -391,71 +413,5 @@ export class Track {
     const pitG = new THREE.Group();
     pitG.add(pit);
     placeAlong(idx(0), -1, WALL_OFFSET + 5, pitG);
-
-    // Trees — instanced, kept clear of the circuit
-    const COUNT = 650;
-    const coneG = new THREE.ConeGeometry(3.2, 9, 7);
-    coneG.translate(0, 7.5, 0);
-    const trunkG = new THREE.CylinderGeometry(0.35, 0.45, 3.2, 5);
-    trunkG.translate(0, 1.6, 0);
-    const leaves = new THREE.InstancedMesh(coneG, new THREE.MeshLambertMaterial({ color: 0xffffff }), COUNT);
-    const trunks = new THREE.InstancedMesh(trunkG, new THREE.MeshLambertMaterial({ color: 0x5b4030 }), COUNT);
-    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3();
-    const c = new THREE.Color();
-    let placed = 0, tries = 0;
-    while (placed < COUNT && tries++ < 20000) {
-      const x = -900 + rand() * 1700, z = -900 + rand() * 1200;
-      if (!this.clearOfTrack(x, z, WALL_OFFSET + 8)) continue;
-      if (z > -40 && z < 70 && x > -360 && x < 420) continue; // keep grandstand/pit area open
-      const k = 0.7 + rand() * 0.8;
-      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rand() * 6.28);
-      m4.compose(p.set(x, 0, z), q, s.set(k, k * (0.8 + rand() * 0.5), k));
-      leaves.setMatrixAt(placed, m4);
-      trunks.setMatrixAt(placed, m4);
-      leaves.setColorAt(placed, c.setHSL(0.27 + rand() * 0.08, 0.45 + rand() * 0.2, 0.18 + rand() * 0.1));
-      placed++;
-    }
-    leaves.count = trunks.count = placed;
-    leaves.castShadow = true;
-    this.group.add(leaves, trunks);
-
-    // Distant mountains
-    const segs = 96, mPos = [], mCol = [], mIdx = [];
-    const cA = new THREE.Color(0x5d6f86), cB = new THREE.Color(0xc9d6e3);
-    for (let i = 0; i <= segs; i++) {
-      const a = i / segs * Math.PI * 2;
-      const h = 90 + Math.abs(Math.sin(a * 3.1) * 160 + Math.sin(a * 7.3 + 1) * 70 + Math.sin(a * 13.7) * 30);
-      const R = 2200;
-      mPos.push(Math.cos(a) * R, -20, Math.sin(a) * R, Math.cos(a) * R * 1.02, h, Math.sin(a) * R * 1.02);
-      mCol.push(cA.r, cA.g, cA.b);
-      const top = h > 260 ? cB : cA.clone().lerp(cB, h / 400);
-      mCol.push(top.r, top.g, top.b);
-      if (i < segs) { const v = i * 2; mIdx.push(v, v + 2, v + 1, v + 1, v + 2, v + 3); }
-    }
-    const mg = new THREE.BufferGeometry();
-    mg.setAttribute('position', new THREE.Float32BufferAttribute(mPos, 3));
-    mg.setAttribute('color', new THREE.Float32BufferAttribute(mCol, 3));
-    mg.setIndex(mIdx);
-    const mountains = new THREE.Mesh(mg, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, fog: false }));
-    this.group.add(mountains);
-  }
-
-  buildSky() {
-    const geo = new THREE.SphereGeometry(2800, 24, 12);
-    const mat = new THREE.ShaderMaterial({
-      side: THREE.BackSide, depthWrite: false, fog: false,
-      uniforms: {
-        top: { value: new THREE.Color(0x2f6fb8) },
-        horizon: { value: new THREE.Color(0xdfe8ef) },
-        sunDir: { value: new THREE.Vector3(0.4, 0.55, 0.3).normalize() },
-      },
-      vertexShader: 'varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
-      fragmentShader: `uniform vec3 top; uniform vec3 horizon; uniform vec3 sunDir; varying vec3 vDir;
-        void main(){ float h = max(vDir.y, 0.0); vec3 c = mix(horizon, top, pow(h, 0.55));
-        float s = max(dot(normalize(vDir), sunDir), 0.0); c += vec3(1.0,0.9,0.7) * (pow(s, 600.0) * 2.0 + pow(s, 12.0) * 0.18);
-        gl_FragColor = vec4(c, 1.0); }`,
-    });
-    this.sky = new THREE.Mesh(geo, mat);
-    this.group.add(this.sky);
   }
 }

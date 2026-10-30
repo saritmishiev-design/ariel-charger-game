@@ -18,6 +18,12 @@ A mobile-first, physics-based 3D driving game (PWA). A 1979 Dodge Charger with a
   overrun crackle, limiter misfires, supercharger whine, intake roar, gear whine, tyre squeal, wind, starter, clunks & grinds.
 - **Track:** "Ariel Raceway", a 3.6 km closed circuit with an 800 m main straight, fast sweepers, a tight chicane,
   a 430 m back straight, a heavy-braking hairpin, esses and a final hairpin. Lap timer with best-lap memory.
+- **Graphics:** PBR materials (two-layer flaked metallic paint with clear coat, chrome, Fresnel glass, cabin interior),
+  image-based lighting from a procedural sky with drifting clouds, warm low sun with soft PCF shadows that follow the car,
+  contact shadow, procedural asphalt (aggregate, rubbered racing line, tar snakes, braking-zone skid marks), anti-tiling
+  grass, swaying 3D grass tufts, two kinds of instanced trees with distance LOD, a forest belt and layered snowy ridges.
+  **Battery saver** in the menu lowers resolution, shadow detail and scenery density.
+- **For Ariel, from Sarit:** trackside billboards, a lap-complete banner and a pause screen with personal messages.
 - **PWA:** `manifest.json` (fullscreen, landscape) + service worker with offline precache.
 
 ## Driving
@@ -42,7 +48,10 @@ js/config.js                   car spec & tuning
 js/drivetrain.js               engine / clutch / gearbox / rear axle model
 js/vehicle.js                  cannon-es raycast vehicle + steering, brakes, aero
 js/carModel.js                 procedural 3D Charger
-js/track.js                    circuit, curbs, barriers, scenery
+js/track.js                    circuit, road, curbs, barriers, grandstands
+js/scenery.js                  trees, grass tufts, mountains, billboards, LOD
+js/sky.js, textures.js         sky dome + environment map, procedural textures
+js/merge.js                    draw-call merging helper
 js/audio.js, engine-worklet.js engine & effects audio
 js/controls.js, hud.js, effects.js
 vendor/                        three.js r160, cannon-es 0.20 (MIT)

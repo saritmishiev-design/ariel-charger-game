@@ -8,12 +8,13 @@ import { Controls } from './controls.js';
 import { AudioEngine } from './audio.js';
 import { HUD, fmtTime } from './hud.js';
 import { TyreSmoke, SkidMarks } from './effects.js';
+import { Sky, makeEnvMap, SUN_DIR, HORIZON } from './sky.js';
 
 const $ = (id) => document.getElementById(id);
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 
 // ---------------- Settings ----------------
-const DEFAULTS = { units: 'kmh', steer: 'tilt', tilt: 28, tcs: true, auto: false, paint: 'red', volume: 0.9, cam: 0 };
+const DEFAULTS = { units: 'kmh', steer: 'tilt', tilt: 28, tcs: true, auto: false, paint: 'red', volume: 0.9, cam: 0, gfx: 'high' };
 let settings = { ...DEFAULTS };
 try { settings = { ...DEFAULTS, ...JSON.parse(localStorage.getItem('charger.settings') || '{}') }; } catch (e) { /* private mode */ }
 const saveSettings = () => { try { localStorage.setItem('charger.settings', JSON.stringify(settings)); } catch (e) { /* ignore */ } };
@@ -21,49 +22,38 @@ let bestLap = null;
 try { bestLap = parseFloat(localStorage.getItem('charger.best')) || null; } catch (e) { /* ignore */ }
 
 // ---------------- Renderer & scene ----------------
+const HIGH = settings.gfx !== 'low';
 const canvas = $('scene');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.6));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, HIGH ? 1.75 : 1.1));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
+renderer.toneMappingExposure = 1.0;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0xdfe8ef, 260, 2000);
-const camera = new THREE.PerspectiveCamera(62, 1, 0.05, 6000);
+// Fog is blended after tone mapping, so it takes the sky's display-space horizon colour as-is
+scene.fog = new THREE.Fog(HORIZON.clone(), 350, 3200);
+// near = 0.25: keeps enough depth precision for the road ribbon to sit 2 cm above the grass
+const camera = new THREE.PerspectiveCamera(62, 1, 0.25, 6000);
 
-scene.add(new THREE.HemisphereLight(0xd6e6ff, 0x4d5a2c, 0.75));
-const sun = new THREE.DirectionalLight(0xfff0dc, 2.3);
+// Image-based lighting from the sky: every PBR surface picks up sky/horizon reflections
+const envMap = makeEnvMap(renderer);
+scene.environment = envMap;
+const sky = new Sky(scene, settings.gfx);
+
+// Sun: warm late-afternoon key light with soft PCF shadows; sky fill comes from the environment
+scene.add(new THREE.HemisphereLight(0xcfe0ff, 0x3d4a24, 0.35));
+const sun = new THREE.DirectionalLight(0xffe6c4, 3.2);
 sun.castShadow = true;
-sun.shadow.mapSize.set(1024, 1024);
+const SHADOW_SIZE = HIGH ? 2048 : 1024, SHADOW_HALF = HIGH ? 42 : 30;
+sun.shadow.mapSize.set(SHADOW_SIZE, SHADOW_SIZE);
 const sc = sun.shadow.camera;
-sc.left = -28; sc.right = 28; sc.top = 28; sc.bottom = -28; sc.near = 1; sc.far = 160;
-sun.shadow.bias = -0.0004;
-sun.shadow.normalBias = 0.03;
+sc.left = -SHADOW_HALF; sc.right = SHADOW_HALF; sc.top = SHADOW_HALF; sc.bottom = -SHADOW_HALF; sc.near = 1; sc.far = 320;
+sun.shadow.bias = -0.0003;
+sun.shadow.normalBias = 0.04;
 scene.add(sun, sun.target);
-const SUN_DIR = new THREE.Vector3(0.4, 0.55, 0.3).normalize();
-
-// Environment map for paint & chrome reflections
-function makeEnvMap() {
-  const pm = new THREE.PMREMGenerator(renderer);
-  const env = new THREE.Scene();
-  const sky = new THREE.Mesh(new THREE.SphereGeometry(50, 32, 16), new THREE.ShaderMaterial({
-    side: THREE.BackSide,
-    vertexShader: 'varying vec3 d; void main(){ d = normalize(position); gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.); }',
-    fragmentShader: `varying vec3 d; void main(){
-      vec3 top = vec3(0.18,0.42,0.78), hor = vec3(0.9,0.93,0.96), gnd = vec3(0.2,0.24,0.14);
-      vec3 c = d.y > 0. ? mix(hor, top, pow(d.y, .5)) : mix(hor*0.7, gnd, pow(-d.y, .35));
-      float s = max(dot(d, normalize(vec3(.4,.55,.3))), 0.); c += vec3(6.,5.5,4.5) * pow(s, 300.);
-      gl_FragColor = vec4(c,1.); }`,
-  }));
-  env.add(sky);
-  const tex = pm.fromScene(env, 0.02).texture;
-  pm.dispose();
-  return tex;
-}
-const envMap = makeEnvMap();
 
 // ---------------- Physics ----------------
 const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.81, 0) });
@@ -82,10 +72,10 @@ groundBody.addShape(new CANNON.Plane());
 groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
 world.addBody(groundBody);
 
-const track = new Track(scene, world, materials);
+const track = new Track(scene, world, materials, settings.gfx);
 const vehicle = new Vehicle(world, SPEC, materials);
 const car = new CarModel(vehicle, envMap);
-scene.add(car.root);
+scene.add(car.root, car.contact);
 car.setPaint(settings.paint);
 
 const smoke = new TyreSmoke(scene);
@@ -163,7 +153,7 @@ vehicle.body.addEventListener('collide', (e) => {
 const camPos = new THREE.Vector3();
 const camLook = new THREE.Vector3();
 let camInit = false;
-const tmpV = new THREE.Vector3(), tmpF = new THREE.Vector3(), tmpQ = new THREE.Quaternion();
+const tmpV = new THREE.Vector3(), tmpF = new THREE.Vector3(), tmpQ = new THREE.Quaternion(), tmpS = new THREE.Vector3();
 
 function updateCamera(dt) {
   const b = vehicle.body;
@@ -176,6 +166,7 @@ function updateCamera(dt) {
   const mode = CAM_MODES[state.camMode];
   const speed = Math.abs(vehicle.speed);
   audio.setInterior(mode === 'hood');
+  car.interior.visible = mode !== 'hood';   // the cabin is for the outside views; hood cam looks over it
 
   if (mode === 'hood') {
     const eye = new THREE.Vector3(-0.36, 0.64, 0.7).applyQuaternion(car.body.getWorldQuaternion(new THREE.Quaternion())).add(p);
@@ -202,9 +193,12 @@ function updateCamera(dt) {
   }
   camera.updateProjectionMatrix();
 
-  // Shadow camera follows the car
-  sun.position.copy(p).addScaledVector(SUN_DIR, 80);
-  sun.target.position.copy(p);
+  // Shadow camera follows the car, centred a little ahead and snapped to whole texels (no shimmer)
+  const texel = (SHADOW_HALF * 2) / SHADOW_SIZE;
+  const c = tmpS.copy(p).addScaledVector(fwd, SHADOW_HALF * 0.45);
+  c.x = Math.round(c.x / texel) * texel; c.z = Math.round(c.z / texel) * texel; c.y = 0;
+  sun.position.copy(c).addScaledVector(SUN_DIR, 150);
+  sun.target.position.copy(c);
 }
 
 // ---------------- Lap timing ----------------
@@ -225,6 +219,7 @@ function updateLap(idx) {
           hud.toast(`NEW BEST  ${fmtTime(lt)}`, 3);
         } else hud.toast(`LAP  ${fmtTime(lt)}`, 2.5);
         state.lap++;
+        showLapBanner();
       } else if (state.lapStart == null) {
         state.lap = 1;
       }
@@ -235,6 +230,18 @@ function updateLap(idx) {
     }
   }
   state.trackIndex = idx;
+}
+
+// Every completed lap: a 4-second reminder of the real prize
+let bannerTimer = null;
+function showLapBanner() {
+  const el = $('lap-banner');
+  el.classList.remove('show');
+  void el.offsetWidth;   // restart the animation
+  el.classList.add('show');
+  haptic([30, 60, 30]);
+  clearTimeout(bannerTimer);
+  bannerTimer = setTimeout(() => el.classList.remove('show'), 4000);
 }
 
 // ---------------- Main loop ----------------
@@ -332,6 +339,8 @@ function frame(now) {
 
   car.sync(state.paused ? 0 : dt);
   if (!state.debugCam) updateCamera(dt);
+  track.update(dt, camera);
+  sky.update(dt, camera);
   renderer.render(scene, camera);
 }
 
@@ -372,6 +381,12 @@ function buildMenu() {
   seg('set-units', 'units');
   seg('set-tcs', 'tcs', (v) => v === '1');
   seg('set-auto', 'auto', (v) => v === '1');
+  $('set-gfx').querySelectorAll('button').forEach(btn => btn.addEventListener('click', () => {
+    if (settings.gfx === btn.dataset.v) return;
+    settings.gfx = btn.dataset.v; saveSettings();
+    location.reload();   // scenery density and shadow resolution are set at load
+  }));
+  $('btn-settings').addEventListener('click', () => menu.classList.toggle('show-settings'));
   $('set-tilt').addEventListener('input', (e) => { settings.tilt = +e.target.value; applySettings(); });
   $('set-vol').addEventListener('input', (e) => { settings.volume = +e.target.value; applySettings(); });
   $('btn-go').addEventListener('click', onGo);
@@ -399,6 +414,7 @@ function syncMenu() {
   segSet('set-units', settings.units);
   segSet('set-tcs', settings.tcs ? '1' : '0');
   segSet('set-auto', settings.auto ? '1' : '0');
+  segSet('set-gfx', settings.gfx);
   $('set-tilt').value = settings.tilt;
   $('set-vol').value = settings.volume;
   $('best-lap').textContent = bestLap ? fmtTime(bestLap) : '—';
@@ -419,7 +435,7 @@ async function onGo() {
   const tiltOk = await tilt;
   try { await snd; } catch (e) { console.warn('audio init failed', e); }
   applySettings();
-  menu.classList.remove('show');
+  menu.classList.remove('show', 'show-settings');
   document.body.classList.add('playing');
   state.paused = false;
   audio.resume();
@@ -477,4 +493,4 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
 }
 
 // Debug handle (handy from the browser console)
-window.__game = { vehicle, state, audio, controls, track, camera, car };
+window.__game = { vehicle, state, audio, controls, track, camera, car, renderer };

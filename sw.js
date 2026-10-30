@@ -1,6 +1,6 @@
 // Service worker: precache everything so the game runs offline from the home screen.
 // Bump VERSION whenever files change to roll out an update.
-const VERSION = 'charger-v1';
+const VERSION = 'charger-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -17,6 +17,10 @@ const ASSETS = [
   './js/engine-worklet.js',
   './js/hud.js',
   './js/effects.js',
+  './js/sky.js',
+  './js/textures.js',
+  './js/scenery.js',
+  './js/merge.js',
   './vendor/three.module.min.js',
   './vendor/cannon-es.js',
   './icons/icon.svg',

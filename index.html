@@ -45,6 +45,10 @@
 
     <button id="btn-start" aria-label="Start engine"><span>START</span><small>ENGINE</small></button>
     <div id="toast"></div>
+    <div id="lap-banner" role="status" aria-live="polite">
+      <div class="lb-heart">❤</div>
+      <p><b>Great lap!</b> But don't forget your wife, Sarit, is your real ultimate prize.</p>
+    </div>
   </div>
 
   <!-- ===== Touch controls ===== -->
@@ -72,6 +76,10 @@
   <!-- ===== Menu ===== -->
   <div id="menu" class="show">
     <div class="panel">
+      <div id="pause-msg" class="paused-block">
+        <p><span class="pm-title">Game Paused.</span> Excellent time to study for the Bar Exam, or at least go hug your wife, Sarit. <span class="pm-heart">❤</span></p>
+      </div>
+
       <header>
         <div class="badge">700 HP · HEMI V8 · 5-SPEED · RWD</div>
         <h1>ARIEL'S <span>'79 CHARGER</span></h1>
@@ -103,7 +111,11 @@
           <label>Units</label>
           <div class="seg" id="set-units"><button data-v="kmh">km/h</button><button data-v="mph">mph</button></div>
         </div>
-        <div class="setting wide">
+        <div class="setting">
+          <label>Graphics</label>
+          <div class="seg" id="set-gfx"><button data-v="high">High</button><button data-v="low">Battery saver</button></div>
+        </div>
+        <div class="setting">
           <label>Engine volume</label>
           <input type="range" id="set-vol" min="0" max="1.5" step="0.05">
         </div>
@@ -112,6 +124,7 @@
       <div class="actions">
         <button id="btn-go" class="primary">TURN THE KEY</button>
         <button id="btn-restart" class="ghost paused-only">RESTART RACE</button>
+        <button id="btn-settings" class="ghost paused-only">SETTINGS</button>
         <button id="btn-calibrate" class="ghost paused-only">CENTER TILT</button>
       </div>
 
