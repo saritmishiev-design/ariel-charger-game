@@ -13,9 +13,11 @@ A mobile-first, physics-based 3D driving game (PWA). A 1979 Dodge Charger with a
 - **Power slides:** flooring it in 1st or 2nd breaks the rears loose (torque kick near the soft limiter), the
   rear steps out progressively and can be held with throttle and counter-steer; traction control allows the
   slide but trims power if it gets too big. Billowing, sun-shaded 3D tyre smoke pours off the rear tyres.
-- **Physics:** cannon-es raycast vehicle, fixed 120 Hz step, aero drag, rolling resistance, grass/verge grip.
+- **Physics:** cannon-es raycast vehicle, fixed 120 Hz step, aero drag, rolling resistance, grass/verge grip,
+  stable (slightly understeering) grip balance, frictionless barriers the car slides along, anti-stall after impacts.
 - **Controls:** analog GAS / BRAKE / CLUTCH pedals, draggable H-pattern Hurst shifter (or tap a gear), gyro steering
-  (DeviceOrientation, either landscape direction, wide deadzone, expo curve and smoothing), touch-slider fallback, haptics.
+  (DeviceOrientation, either landscape direction, ±10° deadzone, 60° to full lock, heavy smoothing and a slow
+  turn-in rate; at speed the lock is capped near the tyres' grip so big inputs can't spin the car), touch-slider fallback, haptics.
 - **Audio (Web Audio + AudioWorklet):** 8 combustion pulses per cycle in Hemi firing order 1-8-4-3-6-5-7-2 feeding two
   deliberately mismatched exhaust banks (level, pulse shape, pipe resonance, path delay) so the uneven cross-plane
   rhythm survives a mono phone speaker, throat formants, asymmetric saturation, pipe waveguides, load-dependent muffler, saturation, big-cam idle lope,

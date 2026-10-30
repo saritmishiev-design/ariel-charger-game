@@ -29,8 +29,12 @@ export const SPEC = {
   dampingCompression: 3.4,
   dampingRelaxation: 2.6,
   rollInfluence: 0.09,
-  frictionSlipFront: 1.08,
-  frictionSlipRear: 1.0,
+  // Lateral grip limits. The rear must out-grip the front: cannon's tyres saturate at tiny slip
+  // angles, so the axle that lets go first decides the balance. Rear-first (the old 1.08 / 1.00)
+  // meant built-in oversteer and a yaw that kept growing at speed; front-first = stable understeer.
+  // Power oversteer still comes from wheelspin eating rear grip (see vehicle.js).
+  frictionSlipFront: 1.0,
+  frictionSlipRear: 1.22,
 
   // Engine — 7.2L Hemi, built to 700 hp @ 6200 rpm
   idleRpm: 850,
@@ -67,3 +71,7 @@ export const SPEC = {
 };
 
 export const PHYSICS_DT = 1 / 120;
+
+// Car body vs barriers: frictionless and barely bouncy, so the car glances off and slides along
+// the wall instead of snagging, spinning round or stopping dead.
+export const WALL_CONTACT = { friction: 0, restitution: 0.05 };

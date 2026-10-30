@@ -1,6 +1,6 @@
 import * as THREE from '../vendor/three.module.min.js';
 import * as CANNON from '../vendor/cannon-es.js';
-import { SPEC, PHYSICS_DT } from './config.js';
+import { SPEC, PHYSICS_DT, WALL_CONTACT } from './config.js';
 import { Vehicle } from './vehicle.js';
 import { CarModel, PAINTS } from './carModel.js';
 import { Track, ROAD_HALF } from './track.js';
@@ -14,11 +14,11 @@ const $ = (id) => document.getElementById(id);
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 
 // ---------------- Settings ----------------
-const DEFAULTS = { units: 'kmh', steer: 'tilt', tilt: 42, tcs: true, auto: false, paint: 'red', volume: 0.9, cam: 0, gfx: 'high', tiltV: 2 };
+const DEFAULTS = { units: 'kmh', steer: 'tilt', tilt: 60, tcs: true, auto: false, paint: 'red', volume: 0.9, cam: 0, gfx: 'high', tiltV: 3 };
 let settings = { ...DEFAULTS };
 try { settings = { ...DEFAULTS, ...JSON.parse(localStorage.getItem('charger.settings') || '{}') }; } catch (e) { /* private mode */ }
-// v2 tilt calibration is calmer: move saved twitchy values (old default 28°) onto the new scale once
-if (settings.tiltV !== 2) { settings.tilt = DEFAULTS.tilt; settings.tiltV = 2; }
+// Tilt calibration v3 is much calmer: move any saved (twitchier) value onto the new scale once
+if (settings.tiltV !== DEFAULTS.tiltV) { settings.tilt = DEFAULTS.tilt; settings.tiltV = DEFAULTS.tiltV; }
 const saveSettings = () => { try { localStorage.setItem('charger.settings', JSON.stringify(settings)); } catch (e) { /* ignore */ } };
 let bestLap = null;
 try { bestLap = parseFloat(localStorage.getItem('charger.best')) || null; } catch (e) { /* ignore */ }
@@ -67,7 +67,7 @@ const materials = {
   chassis: new CANNON.Material('chassis'),
   wall: new CANNON.Material('wall'),
 };
-world.addContactMaterial(new CANNON.ContactMaterial(materials.chassis, materials.wall, { friction: 0.12, restitution: 0.18 }));
+world.addContactMaterial(new CANNON.ContactMaterial(materials.chassis, materials.wall, WALL_CONTACT));
 world.addContactMaterial(new CANNON.ContactMaterial(materials.chassis, materials.ground, { friction: 0.45, restitution: 0.02 }));
 const groundBody = new CANNON.Body({ mass: 0, material: materials.ground });
 groundBody.addShape(new CANNON.Plane());
@@ -201,6 +201,7 @@ function crank() {
 // Collisions → sound + haptics
 vehicle.body.addEventListener('collide', (e) => {
   const v = Math.abs(e.contact.getImpactVelocityAlongNormal());
+  if (e.body !== groundBody) vehicle.wallHit(v);
   if (v > 1.5 && e.body !== groundBody) {
     audio.impact(v / 14);
     haptic(Math.min(80, 15 + v * 4));

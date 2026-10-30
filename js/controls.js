@@ -16,8 +16,8 @@ export class Controls {
     this.pedals = { gas: 0, brake: 0, clutch: 0 };
     this.keys = new Set();
     this.steerMode = 'tilt';
-    this.tiltRange = 42;          // degrees of phone rotation for full lock
-    this.tiltDeadzone = 3.5;      // degrees around centre that do nothing (hand tremor, road bumps)
+    this.tiltRange = 60;          // degrees of phone rotation for full lock
+    this.tiltDeadzone = 10;       // ±10° around centre does nothing at all (hand movement, bumps)
     this.tiltCenter = 0;
     this.tiltRaw = 0;
     this.tiltSmooth = 0;          // filtered steering output, -1..1
@@ -285,12 +285,14 @@ export class Controls {
       // Wide deadzone, then rescale so steering still starts from zero at its edge
       const dz = this.tiltDeadzone;
       const mag = Math.max(0, Math.abs(a) - dz) / Math.max(1, this.tiltRange - dz);
-      // Expo curve: small tilts give very gentle steering, full lock only near the end
-      const target = Math.sign(a) * Math.pow(Math.min(1, mag), 1.5);
-      // Smooth (≈0.15 s low-pass) and rate-limit so jitter and quick wobbles don't reach the wheels
-      const k = 1 - Math.exp(-dt / 0.15);
-      const step = clamp((target - this.tiltSmooth) * k, -dt * 1.8, dt * 1.8);
-      this.tiltSmooth += step;
+      // Expo curve: just past the deadzone the steering is very gentle, full lock only near the end
+      const target = Math.sign(a) * Math.pow(Math.min(1, mag), 1.6);
+      // Heavy smoothing (≈0.35 s low-pass) plus a slow turn-in rate (full lock takes ~1.4 s);
+      // unwinding back toward centre is allowed twice as fast so the car straightens up readily
+      const k = 1 - Math.exp(-dt / 0.35);
+      const unwinding = Math.abs(target) < Math.abs(this.tiltSmooth) || Math.sign(target) !== Math.sign(this.tiltSmooth);
+      const rate = (unwinding ? 1.4 : 0.7) * dt;
+      this.tiltSmooth += clamp((target - this.tiltSmooth) * k, -rate, rate);
       steer = this.tiltSmooth;
     } else if (this.steerMode === 'touch') {
       steer = this.touchSteer;

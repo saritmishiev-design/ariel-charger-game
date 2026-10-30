@@ -84,12 +84,19 @@ export class Vehicle {
     this.surfaceMu = 1;
     this.surfaceDrag = 1;
     this.brakeInput = 0;
+    this.wallTimer = 0;        // seconds since/while scraping a barrier: stabilises the slide
     this._fwd = new CANNON.Vec3();
     this._right = new CANNON.Vec3();
     this._tmp = new CANNON.Vec3();
   }
 
   get rpm() { return this.drivetrain.rpm; }
+
+  /** Called on contact with a barrier (impact speed m/s). */
+  wallHit(v) {
+    this.wallTimer = Math.max(this.wallTimer, 0.5 + Math.min(0.7, v * 0.05));
+    this.drivetrain.antiStall = 3;
+  }
 
   /** Place the car at a world position with a heading (rad about Y). */
   reset(x, y, z, heading) {
@@ -116,8 +123,16 @@ export class Vehicle {
     const vLat = b.velocity.dot(this._right);
     this.speed = v;
 
-    // --- Steering: speed-sensitive lock + rate limit, Ackermann geometry
-    const lock = s.maxSteer / (1 + (v / s.steerSpeedFalloff) ** 2);
+    // --- Steering: speed-sensitive lock + rate limit, Ackermann geometry.
+    // At speed, full lock is capped near what the tyres can actually hold (≈1.7× the angle for
+    // limit cornering), so a big steering input can't throw the car into a spin. While sliding,
+    // extra lock is released for counter-steer.
+    const vv = Math.max(Math.abs(v), 1);
+    const gripLock = 1.7 * s.wheelbase * s.tyreMu * this.surfaceMu * 9.81 / (vv * vv);
+    // Counter-steer = steering toward where the car is actually travelling (+ steer is left, + vLat is right)
+    const counter = input.steer * vLat < 0 && Math.abs(v) > 4;
+    const counterRoom = counter ? Math.min(0.3, Math.atan2(Math.abs(vLat), Math.abs(v))) : 0;
+    const lock = Math.min(s.maxSteer / (1 + (v / s.steerSpeedFalloff) ** 2), Math.max(0.025, gripLock)) + counterRoom;
     const target = clamp(input.steer, -1, 1) * lock;
     const rate = 2.4 * dt;
     this.steer += clamp(target - this.steer, -rate, rate);
@@ -186,6 +201,14 @@ export class Vehicle {
       const roll = grounded ? s.rollingResistance * this.surfaceDrag * s.mass * 9.81 * Math.min(1, sp / 0.5) : 0;
       const k = -(drag + roll) / sp;
       b.applyForce(this._tmp.set(vel.x * k, vel.y * k * 0.2, vel.z * k));
+    }
+
+    // Scraping a wall: damp the spin the impact induces so the car straightens up and slides along it
+    if (this.wallTimer > 0) {
+      this.wallTimer -= dt;
+      const k = Math.max(0, 1 - 6 * dt);
+      b.angularVelocity.y *= k;
+      b.angularVelocity.x *= k; b.angularVelocity.z *= k;
     }
 
     // Telemetry for audio/effects

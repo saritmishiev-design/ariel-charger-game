@@ -44,6 +44,7 @@ export class Drivetrain {
     this.cutAmount = 0;        // soft rev-limiter spark cut 0..1
     this.powerSlide = 0;       // 0..1: 1st/2nd at full throttle — rear breaks loose
     this.stabilityCut = 0;     // set by the vehicle: throttle trimmed when the slide gets too big (TCS on)
+    this.antiStall = 0;        // seconds of anti-stall protection left (set on wall impacts)
     this.nitrous = 0;          // input: 1 while the NOS solenoids are open
     this.nitrousAmt = 0;       // smoothed 0..1
     this.load = 0;             // effective combustion load 0..1 (for audio)
@@ -180,7 +181,17 @@ export class Drivetrain {
     const target = this.throttleInput * this.tcsFactor * (1 - this.stabilityCut);
     this.throttle += (target - this.throttle) * Math.min(1, dt / 0.045);
 
-    const engage = this.autoClutch ? this.autoEngagement(dt) : this.pedalEngagement();
+    let engage = this.autoClutch ? this.autoEngagement(dt) : this.pedalEngagement();
+    // Anti-stall after a hit: slip the clutch automatically so a sudden stop can't kill the engine
+    // Stays latched while the revs are still low in gear, so a car left stopped against the wall idles
+    // (and can pull away on the slipping clutch) until the driver is moving again.
+    if (this.antiStall > 0) {
+      this.antiStall -= dt;
+      if (this.running && this.gear !== 0) {
+        engage = Math.min(engage, clamp((this.rpm - 600) / 450, 0, 1));
+        if (this.rpm < 1100) this.antiStall = Math.max(this.antiStall, 0.5);
+      }
+    }
     this.clutchEngage = engage;
     const Tcap = s.clutchMaxTorque * Math.pow(engage, 1.4);
     const G = this.ratio();
