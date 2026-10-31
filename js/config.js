@@ -75,7 +75,7 @@ export const SPEC = {
 export const PHYSICS_DT = 1 / 120;
 
 // Shown in the menu so it's easy to confirm which version a phone is running (sw.js VERSION matches).
-export const BUILD = 10;
+export const BUILD = 11;
 
 // Car body vs barriers: frictionless and barely bouncy, so the car glances off and slides along
 // the wall instead of snagging, spinning round or stopping dead.

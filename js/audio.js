@@ -1,20 +1,59 @@
 // Web Audio graph: V8 worklet + blower whine + intake + tyres + wind + one-shots.
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 
+// iPhone / iPad (iPadOS reports itself as a Mac with touch)
+export const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) ||
+  /[?&]ios=1/.test(location.search);   // force the iOS audio path for testing
+
 export class AudioEngine {
   constructor() {
     this.ctx = null;
     this.ready = false;
     this.volume = 1;
     this.interior = false;
+    // iOS Safari never prunes finished automation events, so the per-frame setTargetAtTime calls
+    // build an ever-growing timeline until WebKit's audio thread overruns and the sound dies.
+    // On iOS the same smoothing runs in JS and values are written directly (no events at all).
+    this.directParams = IS_IOS;
+    this.smooth = new Map();
+    this.frameDt = 1 / 60;
+    this.lastT = 0;
+    this.wantRunning = false;
+    this.lastImpact = 0;
+    this.lastImpactS = 0;
+    this.watch = { ctxT: 0, wall: 0, stuck: false };
+  }
+
+  /** Smoothly move an AudioParam toward v with time constant tc (s). */
+  ramp(param, v, tc) {
+    if (!this.directParams) { param.setTargetAtTime(v, this.ctx.currentTime, tc); return; }
+    let st = this.smooth.get(param);
+    if (!st) { st = { v: typeof param.value === 'number' ? param.value : 0 }; this.smooth.set(param, st); }
+    st.v += (v - st.v) * (tc <= 0.002 ? 1 : 1 - Math.exp(-this.frameDt / tc));
+    if (Math.abs(st.v - st.last) > 1e-5 || st.last === undefined) { param.value = st.v; st.last = st.v; }
   }
 
   async init() {
     if (this.ctx) { await this.ctx.resume(); return; }
     try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* iOS 17+ only */ }
     const AC = window.AudioContext || window.webkitAudioContext;
-    const ctx = new AC({ latencyHint: 'interactive' });
+    const ctx = new AC({ latencyHint: IS_IOS ? 'playback' : 'interactive' });
     this.ctx = ctx;
+    this.smooth = new Map();
+    this.wantRunning = true;
+    // iOS suspends/"interrupts" the context (calls, Siri, other apps, screen lock): resume it
+    ctx.onstatechange = () => { if (this.wantRunning && ctx.state !== 'running' && ctx.state !== 'closed') ctx.resume().catch(() => {}); };
+    if (!this._gestureHook) {
+      this._gestureHook = true;
+      const kick = () => {
+        if (!this.ctx || !this.wantRunning) return;
+        if (this.watch.stuck) { this.restart(); return; }
+        if (this.ctx.state !== 'running') this.ctx.resume().catch(() => {});
+      };
+      document.addEventListener('touchend', kick, { passive: true });
+      document.addEventListener('pointerup', kick, { passive: true });
+    }
     // Unlock on iOS: play a silent buffer inside the user gesture
     const silent = ctx.createBufferSource();
     silent.buffer = ctx.createBuffer(1, 1, ctx.sampleRate);
@@ -176,43 +215,73 @@ export class AudioEngine {
   }
 
   setInterior(on) {
+    // Called every frame by the camera: only touch the filter when the view actually changes
+    if (on === this.interior && this._interiorSet) return;
     this.interior = on;
     if (!this.ready) return;
-    this.cabin.frequency.setTargetAtTime(on ? 2600 : 14000, this.ctx.currentTime, 0.1);
+    this._interiorSet = true;
+    if (this.directParams) this.cabin.frequency.value = on ? 2600 : 14000;
+    else this.cabin.frequency.setTargetAtTime(on ? 2600 : 14000, this.ctx.currentTime, 0.1);
+  }
+
+  /** Tear down a dead context and rebuild the whole graph (must run inside a user gesture on iOS). */
+  async restart() {
+    const old = this.ctx;
+    this.watch.stuck = false;
+    this.ready = false;
+    this.ctx = null;
+    this._interiorSet = false;
+    try { old && old.close(); } catch (e) { /* already gone */ }
+    try { await this.init(); this.setInterior(this.interior); } catch (e) { console.warn('audio restart failed', e); }
   }
 
   setVolume(v) {
     this.volume = v;
-    if (this.master) this.master.gain.setTargetAtTime(v, this.ctx.currentTime, 0.05);
+    if (!this.master) return;
+    if (this.directParams) this.master.gain.value = v;
+    else this.master.gain.setTargetAtTime(v, this.ctx.currentTime, 0.05);
   }
 
-  suspend() { if (this.ctx) this.ctx.suspend(); }
-  resume() { if (this.ctx) this.ctx.resume(); }
+  suspend() { this.wantRunning = false; if (this.ctx) this.ctx.suspend().catch(() => {}); }
+  resume() {
+    this.wantRunning = true;
+    this.watch.wall = performance.now();
+    if (!this.ctx) return;
+    if (this.watch.stuck) { this.restart(); return; }
+    this.ctx.resume().catch(() => {});
+  }
 
   /** Called every frame with telemetry from the car. */
   update(s) {
     if (!this.ready) return;
     const t = this.ctx.currentTime, tc = 0.025;
+    this.frameDt = clamp(t - this.lastT, 0.001, 0.1);
+    this.lastT = t;
+    // Watchdog: if the context claims to run but its clock has frozen for 2 s, the audio thread
+    // has died (an iOS failure mode); rebuild it on the next tap
+    const now = performance.now();
+    if (t !== this.watch.ctxT || this.ctx.state !== 'running' || !this.wantRunning) { this.watch.ctxT = t; this.watch.wall = now; }
+    else if (now - this.watch.wall > 2000) this.watch.stuck = true;
     const rpm = s.rpm, load = s.load;
-    this.p.rpm.setTargetAtTime(rpm, t, 0.012);
-    this.p.load.setTargetAtTime(load, t, 0.03);
-    this.p.running.setTargetAtTime(s.running ? 1 : 0, t, 0.001);
-    this.p.cut.setTargetAtTime(s.cut ? 1 : 0, t, 0.001);
+    this.ramp(this.p.rpm, rpm, 0.012);
+    this.ramp(this.p.load, load, 0.03);
+    this.ramp(this.p.running, s.running ? 1 : 0, 0.001);
+    this.ramp(this.p.cut, s.cut ? 1 : 0, 0.001);
     const nos = s.nitrous || 0;
-    this.p.gain.setTargetAtTime(s.running ? 1 + nos * 0.3 : 0.0, t, s.running ? 0.01 : 0.12);
-    this.nosG.gain.setTargetAtTime(nos * 0.09, t, 0.03);
+    this.ramp(this.p.gain, s.running ? 1 + nos * 0.3 : 0.0, s.running ? 0.01 : 0.12);
+    this.ramp(this.nosG.gain, nos * 0.09, 0.03);
 
     const crankHz = rpm / 60;
     const thr = s.throttle;
-    this.intakeF.frequency.setTargetAtTime(250 + rpm * 0.16, t, tc);
-    this.intakeG.gain.setTargetAtTime(s.running ? (0.015 + thr * 0.12) * clamp(rpm / 6000, 0.2, 1.2) : 0, t, 0.04);
+    this.ramp(this.intakeF.frequency, 250 + rpm * 0.16, tc);
+    this.ramp(this.intakeG.gain, s.running ? (0.015 + thr * 0.12) * clamp(rpm / 6000, 0.2, 1.2) : 0, 0.04);
 
     const blowerHz = crankHz * 1.15 * 6;
-    this.whine.frequency.setTargetAtTime(Math.max(20, blowerHz), t, tc);
-    this.whine2.frequency.setTargetAtTime(Math.max(20, blowerHz * 2.01), t, tc);
-    this.whineF.frequency.setTargetAtTime(Math.max(60, blowerHz * 1.3), t, tc);
+    this.ramp(this.whine.frequency, Math.max(20, blowerHz), tc);
+    this.ramp(this.whine2.frequency, Math.max(20, blowerHz * 2.01), tc);
+    this.ramp(this.whineF.frequency, Math.max(60, blowerHz * 1.3), tc);
     const boost = s.running ? (0.012 + load * 0.05) * Math.pow(clamp(rpm / 6500, 0, 1.1), 1.6) : 0;
-    this.whineG.gain.setTargetAtTime(boost, t, 0.05);
+    this.ramp(this.whineG.gain, boost, 0.05);
 
     // Tyres (silent on grass, where the rumble layer takes over)
     const onGrass = s.offroad ? 1 : 0;
@@ -223,31 +292,37 @@ export class AudioEngine {
     const corner = onGrass ? 0 : clamp((ang - 3) / 15, 0, 1) * clamp(sp / 8, 0, 1);
     const wander = Math.sin(t * 2.3) * 40 + Math.sin(t * 5.9) * 22;
     const pitch = 650 + Math.min(ang, 40) * 22 + wander;
-    this.sqOscA.frequency.setTargetAtTime(pitch, t, 0.06);
-    this.sqOscB.frequency.setTargetAtTime(pitch * 1.503, t, 0.06);
-    this.sqF.frequency.setTargetAtTime(pitch * 1.15, t, 0.06);
-    this.sqNF.frequency.setTargetAtTime(pitch * 1.9, t, 0.06);
-    this.sqVib.frequency.setTargetAtTime(9 + corner * 6, t, 0.1);
-    this.sqToneG.gain.setTargetAtTime(Math.pow(corner, 1.4) * 0.06, t, 0.05);
-    this.sqNoiseG.gain.setTargetAtTime(Math.pow(corner, 1.2) * 0.22, t, 0.05);
+    this.ramp(this.sqOscA.frequency, pitch, 0.06);
+    this.ramp(this.sqOscB.frequency, pitch * 1.503, 0.06);
+    this.ramp(this.sqF.frequency, pitch * 1.15, 0.06);
+    this.ramp(this.sqNF.frequency, pitch * 1.9, 0.06);
+    this.ramp(this.sqVib.frequency, 9 + corner * 6, 0.1);
+    this.ramp(this.sqToneG.gain, Math.pow(corner, 1.4) * 0.06, 0.05);
+    this.ramp(this.sqNoiseG.gain, Math.pow(corner, 1.2) * 0.22, 0.05);
     // Wheelspin / lock-up howl: driven by how fast the tyre surface rubs over the road (m/s)
     const rub = s.slipSpeed || 0;
     const spin = onGrass ? 0 : clamp((rub - 1.5) / 9, 0, 1);
-    this.spF.frequency.setTargetAtTime(420 + Math.min(rub, 40) * 26, t, 0.05);
-    this.spFl.frequency.setTargetAtTime(16 + Math.min(rub, 40) * 0.6, t, 0.1);
-    this.spG.gain.setTargetAtTime(Math.pow(spin, 1.2) * 0.3, t, 0.05);
-    this.offG.gain.setTargetAtTime(onGrass * clamp(sp / 25, 0, 1) * 0.35, t, 0.06);
-    this.windF.frequency.setTargetAtTime(300 + sp * 14, t, 0.1);
-    this.windG.gain.setTargetAtTime(Math.min(0.22, (sp / 80) ** 2 * 0.22), t, 0.1);
+    this.ramp(this.spF.frequency, 420 + Math.min(rub, 40) * 26, 0.05);
+    this.ramp(this.spFl.frequency, 16 + Math.min(rub, 40) * 0.6, 0.1);
+    this.ramp(this.spG.gain, Math.pow(spin, 1.2) * 0.3, 0.05);
+    this.ramp(this.offG.gain, onGrass * clamp(sp / 25, 0, 1) * 0.35, 0.06);
+    this.ramp(this.windF.frequency, 300 + sp * 14, 0.1);
+    this.ramp(this.windG.gain, Math.min(0.22, (sp / 80) ** 2 * 0.22), 0.1);
 
     // Gearbox whine follows output-shaft speed in low gears
     const shaftHz = Math.abs(s.shaftRpm) / 60 * 17;
-    this.gearOsc.frequency.setTargetAtTime(Math.max(20, shaftHz), t, tc);
+    this.ramp(this.gearOsc.frequency, Math.max(20, shaftHz), tc);
     const gw = s.gear !== 0 && s.running ? (s.gear === -1 ? 0.05 : 0.012 * (6 - Math.abs(s.gear)) / 5) * clamp(load + 0.2, 0, 1) : 0;
-    this.gearG.gain.setTargetAtTime(gw, t, 0.05);
+    this.ramp(this.gearG.gain, gw, 0.05);
   }
 
   // ---------------- One-shots ----------------
+  // Every one-shot disconnects its whole chain when its source ends, so nothing piles up in the
+  // graph (iOS keeps finished-but-connected nodes alive far longer than Chrome does).
+  static cleanup(src, nodes) {
+    src.onended = () => { for (const n of nodes) { try { n.disconnect(); } catch (e) { /* already */ } } };
+  }
+
   burst(dur, { type = 'lowpass', freq = 800, q = 1, gain = 0.5, attack = 0.002, dest = null, rate = 1 } = {}) {
     if (!this.ready) return;
     const ctx = this.ctx, t = ctx.currentTime;
@@ -262,6 +337,7 @@ export class AudioEngine {
     src.connect(f).connect(g).connect(dest || this.master);
     src.start(t, Math.random());
     src.stop(t + dur + 0.05);
+    AudioEngine.cleanup(src, [src, f, g]);
     return { f, g, src };
   }
 
@@ -286,6 +362,7 @@ export class AudioEngine {
     const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1900; f.Q.value = 2;
     o.connect(f).connect(g).connect(this.master);
     o.start(t); am.start(t); o.stop(t + 0.5); am.stop(t + 0.5);
+    AudioEngine.cleanup(o, [o, am, amG, g, f]);
     this.burst(0.45, { type: 'bandpass', freq: 3200, q: 3, gain: 0.3, rate: 0.7 });
   }
 
@@ -306,6 +383,7 @@ export class AudioEngine {
     lfo.connect(lfoG).connect(g.gain);
     o.connect(f).connect(g).connect(env).connect(this.master);
     o.start(t); lfo.start(t); o.stop(t + dur + 0.1); lfo.stop(t + dur + 0.1);
+    AudioEngine.cleanup(o, [o, lfo, lfoG, f, g, env]);
   }
 
   ignition() {
@@ -319,6 +397,12 @@ export class AudioEngine {
   }
 
   impact(strength) {
+    // Scraping along a wall reports a contact every physics step (120/s): play at most ~7 hits a
+    // second, and let a much harder hit through early
+    if (!this.ready) return;
+    const now = this.ctx.currentTime;
+    if (now - this.lastImpact < 0.14 && strength < this.lastImpactS * 1.8) return;
+    this.lastImpact = now; this.lastImpactS = strength;
     const s = clamp(strength, 0, 1);
     this.burst(0.25 + s * 0.3, { freq: 380 + s * 400, gain: 0.25 + s * 0.6, q: 0.8 });
     this.burst(0.5, { type: 'bandpass', freq: 1700, q: 8, gain: 0.08 + s * 0.2 });
