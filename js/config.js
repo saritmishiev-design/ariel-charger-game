@@ -59,6 +59,8 @@ export const SPEC = {
   // Brakes — discs front, drums rear, no ABS
   maxBrakeForce: 17500,
   brakeBiasFront: 0.66,
+  handbrakeTorque: 4200,
+  wheelieTorque: 30000,      // N·m nose-up on an all-out launch (see vehicle.js)     // N·m on the rear axle: locks the rears at any speed
 
   // Aero / resistance
   dragCoefficient: 0.46,
@@ -73,7 +75,7 @@ export const SPEC = {
 export const PHYSICS_DT = 1 / 120;
 
 // Shown in the menu so it's easy to confirm which version a phone is running (sw.js VERSION matches).
-export const BUILD = 9;
+export const BUILD = 10;
 
 // Car body vs barriers: frictionless and barely bouncy, so the car glances off and slides along
 // the wall instead of snagging, spinning round or stopping dead.

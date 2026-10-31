@@ -82,15 +82,37 @@ export class AudioEngine {
     this.whineF.connect(this.whineG).connect(this.cabin);
     this.whine.start(); this.whine2.start();
 
-    // Tyre squeal: two resonant bands + slow wobble
-    this.tyreG = ctx.createGain(); this.tyreG.gain.value = 0;
-    const tA = ctx.createBiquadFilter(); tA.type = 'bandpass'; tA.frequency.value = 880; tA.Q.value = 11;
-    const tB = ctx.createBiquadFilter(); tB.type = 'bandpass'; tB.frequency.value = 1450; tB.Q.value = 7;
-    this.tyreFA = tA; this.tyreFB = tB;
-    const tn = noise();
-    tn.connect(tA).connect(this.tyreG);
-    tn.connect(tB).connect(this.tyreG);
-    this.tyreG.connect(this.master);
+    // Tyre squeal: two procedural voices on one bus, mixed with the V8 through the shared master
+    // compressor so the two glue together:
+    //  - cornering squeal: a tonal stick-slip "scream" (two detuned oscillators with jittery vibrato
+    //    through a resonant band) plus a noisy band. Pitch rises with slip angle.
+    //  - wheelspin howl: lower, rougher noise band whose pitch follows the tyre's spin speed over
+    //    the road, amplitude-modulated by a fast flutter.
+    this.tyreBus = ctx.createGain(); this.tyreBus.gain.value = 1;
+    const tyreLP = ctx.createBiquadFilter(); tyreLP.type = 'lowpass'; tyreLP.frequency.value = 6500;
+    this.tyreBus.connect(tyreLP).connect(this.master);
+    // cornering voice
+    this.sqOscA = ctx.createOscillator(); this.sqOscA.type = 'sawtooth';
+    this.sqOscB = ctx.createOscillator(); this.sqOscB.type = 'triangle';
+    this.sqVib = ctx.createOscillator(); this.sqVib.frequency.value = 11;
+    this.sqVibG = ctx.createGain(); this.sqVibG.gain.value = 18;
+    this.sqVib.connect(this.sqVibG); this.sqVibG.connect(this.sqOscA.frequency); this.sqVibG.connect(this.sqOscB.frequency);
+    this.sqF = ctx.createBiquadFilter(); this.sqF.type = 'bandpass'; this.sqF.Q.value = 6;
+    this.sqToneG = ctx.createGain(); this.sqToneG.gain.value = 0;
+    this.sqOscA.connect(this.sqF); this.sqOscB.connect(this.sqF);
+    this.sqF.connect(this.sqToneG).connect(this.tyreBus);
+    this.sqNF = ctx.createBiquadFilter(); this.sqNF.type = 'bandpass'; this.sqNF.Q.value = 9;
+    this.sqNoiseG = ctx.createGain(); this.sqNoiseG.gain.value = 0;
+    noise().connect(this.sqNF).connect(this.sqNoiseG).connect(this.tyreBus);
+    this.sqOscA.start(); this.sqOscB.start(); this.sqVib.start();
+    // wheelspin voice
+    this.spF = ctx.createBiquadFilter(); this.spF.type = 'bandpass'; this.spF.Q.value = 3.5;
+    this.spAM = ctx.createGain(); this.spAM.gain.value = 0.6;
+    this.spFl = ctx.createOscillator(); this.spFl.type = 'square'; this.spFl.frequency.value = 23;
+    this.spFlG = ctx.createGain(); this.spFlG.gain.value = 0.35;
+    this.spFl.connect(this.spFlG).connect(this.spAM.gain); this.spFl.start();
+    this.spG = ctx.createGain(); this.spG.gain.value = 0;
+    noise().connect(this.spF).connect(this.spAM).connect(this.spG).connect(this.tyreBus);
 
     // Gravel / grass rumble
     this.offF = ctx.createBiquadFilter(); this.offF.type = 'lowpass'; this.offF.frequency.value = 380;
@@ -192,14 +214,28 @@ export class AudioEngine {
     const boost = s.running ? (0.012 + load * 0.05) * Math.pow(clamp(rpm / 6500, 0, 1.1), 1.6) : 0;
     this.whineG.gain.setTargetAtTime(boost, t, 0.05);
 
-    // Tyres
-    const scrub = clamp(s.scrub, 0, 1);
+    // Tyres (silent on grass, where the rumble layer takes over)
     const onGrass = s.offroad ? 1 : 0;
-    const sq = onGrass ? 0 : Math.pow(scrub, 1.3) * 0.32;
-    this.tyreG.gain.setTargetAtTime(sq, t, 0.05);
-    this.tyreFA.frequency.setTargetAtTime(780 + scrub * 220 + Math.sin(t * 7) * 30, t, 0.05);
-    this.tyreFB.frequency.setTargetAtTime(1300 + scrub * 300, t, 0.05);
     const sp = Math.abs(s.speed);
+    const ang = s.slideAngle || 0;
+    // Cornering squeal: starts around 3° of slip, full by ~18°; pitch 650 → 1500 Hz with angle,
+    // with a slow random wander so a long drift never sounds like a held note
+    const corner = onGrass ? 0 : clamp((ang - 3) / 15, 0, 1) * clamp(sp / 8, 0, 1);
+    const wander = Math.sin(t * 2.3) * 40 + Math.sin(t * 5.9) * 22;
+    const pitch = 650 + Math.min(ang, 40) * 22 + wander;
+    this.sqOscA.frequency.setTargetAtTime(pitch, t, 0.06);
+    this.sqOscB.frequency.setTargetAtTime(pitch * 1.503, t, 0.06);
+    this.sqF.frequency.setTargetAtTime(pitch * 1.15, t, 0.06);
+    this.sqNF.frequency.setTargetAtTime(pitch * 1.9, t, 0.06);
+    this.sqVib.frequency.setTargetAtTime(9 + corner * 6, t, 0.1);
+    this.sqToneG.gain.setTargetAtTime(Math.pow(corner, 1.4) * 0.06, t, 0.05);
+    this.sqNoiseG.gain.setTargetAtTime(Math.pow(corner, 1.2) * 0.22, t, 0.05);
+    // Wheelspin / lock-up howl: driven by how fast the tyre surface rubs over the road (m/s)
+    const rub = s.slipSpeed || 0;
+    const spin = onGrass ? 0 : clamp((rub - 1.5) / 9, 0, 1);
+    this.spF.frequency.setTargetAtTime(420 + Math.min(rub, 40) * 26, t, 0.05);
+    this.spFl.frequency.setTargetAtTime(16 + Math.min(rub, 40) * 0.6, t, 0.1);
+    this.spG.gain.setTargetAtTime(Math.pow(spin, 1.2) * 0.3, t, 0.05);
     this.offG.gain.setTargetAtTime(onGrass * clamp(sp / 25, 0, 1) * 0.35, t, 0.06);
     this.windF.frequency.setTargetAtTime(300 + sp * 14, t, 0.1);
     this.windG.gain.setTargetAtTime(Math.min(0.22, (sp / 80) ** 2 * 0.22), t, 0.1);

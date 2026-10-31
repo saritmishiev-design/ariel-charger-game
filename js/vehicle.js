@@ -84,7 +84,10 @@ export class Vehicle {
     this.surfaceMu = 1;
     this.surfaceDrag = 1;
     this.brakeInput = 0;
-    this.wallTimer = 0;        // seconds since/while scraping a barrier: stabilises the slide
+    this.wallTimer = 0;
+    this.wheelie = 0;          // 0..1 wheelie drive this step
+    this.wheelieAmt = 0;
+    this.pitch = 0;            // nose-up angle (rad)        // seconds since/while scraping a barrier: stabilises the slide
     this._fwd = new CANNON.Vec3();
     this._right = new CANNON.Vec3();
     this._tmp = new CANNON.Vec3();
@@ -168,6 +171,7 @@ export class Vehicle {
     dtn.brakeInput = input.brake;
     this.brakeInput = input.brake;
     dtn.clutchPedal = input.clutch;
+    dtn.handbrake = input.handbrake ? 1 : 0;
     const Nl = wi[2].raycastResult.body ? wi[2].suspensionForce : 0;
     const Nr = wi[3].raycastResult.body ? wi[3].suspensionForce : 0;
     const N = Nl + Nr;
@@ -185,12 +189,34 @@ export class Vehicle {
     // and never below ~40 %, so a spinning rear steps out into a slide rather than snapping round.
     const sl = Math.abs(dtn.slip);
     const latFactor = Math.max(0.45, 1 / (1 + Math.pow(Math.max(0, sl - 0.08) * 2.0, 1.5)));
-    wi[2].frictionSlip = wi[3].frictionSlip = s.frictionSlipRear * mu * latFactor;
-    this.rearLoose = 1 - latFactor;
+    // Hand brake: locked rears slide sideways easily → the tail swings out into a drift
+    const hb = dtn.handbrake && Math.abs(v) > 3 ? 0.5 : 1;
+    wi[2].frictionSlip = wi[3].frictionSlip = s.frictionSlipRear * mu * latFactor * hb;
+    this.rearLoose = 1 - latFactor * hb;
 
     // Drift feel: extra yaw damping while the rear is loose makes the rotation build gradually
     // (holdable with throttle and counter-steer instead of an instant spin)
-    if (this.rearLoose > 0.02) b.angularVelocity.y *= Math.max(0, 1 - this.rearLoose * 3.2 * dt);
+    if (this.rearLoose > 0.02) b.angularVelocity.y *= Math.max(0, 1 - this.rearLoose * (hb < 1 ? 1.8 : 3.2) * dt);
+
+    // Wheelie: a launch-control or nitrous start puts so much torque through the rears that the
+    // nose rears up and the front wheels leave the ground for a moment. Pitch-up torque scales
+    // with drive force, fades with speed and is capped near 6° so the car always comes back down.
+    const boost = Math.max(dtn.launchTimer > 0 ? 1 : 0, dtn.nitrousAmt);
+    let wl = boost * clamp((F - 7000) / 9000, 0, 1) * clamp(1 - Math.abs(v) / 17, 0, 1);
+    b.quaternion.vmult(this._tmp.set(0, 0, -1), this._tmp);
+    const pitch = Math.asin(clamp(this._tmp.y, -1, 1));
+    this.pitch = pitch;
+    wl *= clamp((0.1 - pitch) / 0.07, 0, 1);                 // soft cap: eases off from ~2° to ~6°
+    this.wheelieAmt += (wl - this.wheelieAmt) * Math.min(1, dt * 6);   // ramp in/out, no jolts
+    this.wheelie = this.wheelieAmt;
+    if (this.wheelieAmt > 0.01 || pitch > 0.02) {
+      // Pitch-rate damping while the nose is up, so it settles back down instead of slamming
+      b.quaternion.vmult(this._right.set(1, 0, 0), this._right);
+      const pitchRate = b.angularVelocity.dot(this._right);
+      const T = s.wheelieTorque * this.wheelieAmt - 9000 * pitchRate * (pitch > 0.01 ? 1 : 0);
+      b.quaternion.vmult(this._tmp.set(T, 0, 0), this._tmp);
+      b.torque.vadd(this._tmp, b.torque);
+    }
 
     // With traction control on, trim the throttle once the slide angle gets excessive
     const slideAngle = Math.abs(v) > 4 ? Math.atan2(Math.abs(vLat), Math.abs(v)) * 57.3 : 0;

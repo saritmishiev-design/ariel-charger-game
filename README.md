@@ -31,6 +31,13 @@ A mobile-first, physics-based 3D driving game (PWA). A 1979 Dodge Charger with a
   **Battery saver** in the menu lowers resolution, shadow detail and scenery density.
 - **For Ariel, from Sarit:** "Love, your wife Sarit" billboards beside the fast sections, bold yellow "Nissan Sentra"
   boards in the heavy braking zones of the slow corners, a 7-second lap-complete banner and a pause screen message.
+- **Launch control:** hold BRAKE + GAS at a standstill in 1st → 3,500 rpm two-step; release the brake and a
+  closed-loop clutch/throttle keeps the rears at peak slip (0-100 km/h ≈ 4.2 s vs ≈ 5.6 s dumping the clutch).
+  Hard launches (and nitrous starts) lift the front wheels for a moment.
+- **E-BRAKE:** hold to lock the rear axle (clutch opens automatically, no stall) and swing into a hairpin.
+- **Sense of speed:** above 120 km/h the FOV widens, the screen edges blur and the camera buzzes gently.
+- **Tyre audio:** procedural cornering squeal (pitch follows slip angle) and wheelspin/lock-up howl (pitch
+  follows the tyre's rub speed), mixed with the V8.
 - **Nitrous:** tap **NOS** to arm, floor the gas to spray (+55 % torque, 3.5 s bottle, refills in 20 s) with exhaust
   flames, radial speed blur, FOV kick and hiss.
 - **HUD:** lap progress bar with distance to the finish; camera button cycles **Chase / Cockpit / Hood**.
@@ -42,7 +49,7 @@ A mobile-first, physics-based 3D driving game (PWA). A 1979 Dodge Charger with a
 3. Shift: lift, clutch in, move the knob, clutch out. Without the clutch the box grinds unless the revs match.
 4. Traction control is on by default; turn it off in the menu for raw 700 hp. **Auto-clutch** hides the clutch pedal.
 
-Keyboard (desktop testing): W/S/A/D or arrows, Space = clutch, 1-5 / R / N, I = ignition, C = camera, X = NOS, T = reset, Esc = menu.
+Keyboard (desktop testing): W/S/A/D or arrows, Space = clutch, 1-5 / R / N, I = ignition, C = camera, X = NOS, H = hand brake, T = reset, Esc = menu.
 
 ## Run locally
 Any static server works (the service worker and motion sensors need `localhost` or HTTPS):

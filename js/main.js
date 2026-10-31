@@ -120,7 +120,7 @@ function applySettings() {
 const state = {
   started: false, paused: true, camMode: settings.cam | 0,
   lap: 0, lapStart: null, lastLap: null, sector: 0, trackIndex: -1,
-  upsideTimer: 0, offroad: false, time: 0,
+  upsideTimer: 0, offroad: false, time: 0, speedFx: 0,
 };
 const CAM_MODES = ['chase', 'cockpit', 'hood'];
 const CAM_LABELS = { chase: 'CHASE', cockpit: 'COCKPIT', hood: 'HOOD' };
@@ -137,6 +137,8 @@ function setCam(i, announce = true) {
   if (announce) hud.toast(CAM_NAMES[mode], 1.1);
   settings.cam = state.camMode; saveSettings();
 }
+
+let handbrakeOn = false;
 
 // ---------------- Nitrous ----------------
 const NOS_BURN = 3.5;      // seconds of spray in a full bottle
@@ -227,6 +229,14 @@ function updateCamera(dt) {
   audio.setInterior(mode === 'cockpit');
   car.interior.visible = mode !== 'hood';   // seats, dash and wheel show in chase and cockpit views
   const nosFov = nos.fx * 12;                // NOS: the world rushes at you
+  // Sense of speed above 120 km/h: wider FOV, edge blur (in frame()) and a gentle road buzz
+  const kmh = speed * 3.6;
+  const sTarget = clamp((kmh - 120) / 110, 0, 1);
+  state.speedFx += (sTarget * sTarget * (3 - 2 * sTarget) - state.speedFx) * Math.min(1, dt * 2.5);
+  const sfx = state.speedFx;
+  const tt = state.time;
+  const buzzX = (Math.sin(tt * 53) * 0.6 + Math.sin(tt * 31.7) * 0.4) * sfx;
+  const buzzY = (Math.sin(tt * 47.3) * 0.6 + Math.sin(tt * 23.1) * 0.4) * sfx;
 
   if (mode !== 'chase') {
     const q = car.body.getWorldQuaternion(new THREE.Quaternion());
@@ -235,9 +245,9 @@ function updateCamera(dt) {
     if (mode === 'cockpit') q.multiply(COCKPIT_TILT);
     camera.quaternion.slerp(q, camInit ? 1 - Math.exp(-dt * 18) : 1);
     const shake = nos.fx * 0.006;
-    camera.position.x += (Math.random() - 0.5) * shake;
-    camera.position.y += (Math.random() - 0.5) * shake;
-    camera.fov = (mode === 'cockpit' ? 66 : 70) + speed * 0.08 + nosFov;
+    camera.position.x += (Math.random() - 0.5) * shake + buzzX * 0.006;
+    camera.position.y += (Math.random() - 0.5) * shake + buzzY * 0.008;
+    camera.fov = (mode === 'cockpit' ? 66 : 70) + speed * 0.08 + nosFov + sfx * 9;
     camInit = true;
   } else {
     const dist = 6.6, height = 2.0;
@@ -250,10 +260,10 @@ function updateCamera(dt) {
     camera.position.copy(camPos);
     // Engine shake near redline
     const shake = Math.pow(clamp(vehicle.rpm / 6800, 0, 1), 4) * 0.025 * (vehicle.drivetrain.load + 0.2) + nos.fx * 0.03;
-    camera.position.x += (Math.random() - 0.5) * shake;
-    camera.position.y += (Math.random() - 0.5) * shake;
+    camera.position.x += (Math.random() - 0.5) * shake + buzzX * 0.035;
+    camera.position.y += (Math.random() - 0.5) * shake + buzzY * 0.03;
     camera.lookAt(camLook);
-    camera.fov = 60 + Math.min(18, speed * 0.2) + nosFov;
+    camera.fov = 60 + Math.min(18, speed * 0.2) + nosFov + sfx * 12;
   }
   camera.updateProjectionMatrix();
 
@@ -329,6 +339,8 @@ function processEvents() {
       case 'shiftDown': audio.shift(false); break;
       case 'grind': audio.grind(); if (!settings.auto) hud.toast('GRIND! Use the clutch', 1.4); break;
       case 'limiter': haptic(12); break;
+      case 'launchArmed': haptic([15, 25, 15]); hud.toast('LAUNCH CONTROL · 3,500 RPM — release BRAKE to go!', 2.5); break;
+      case 'launch': haptic(40); hud.toast('LAUNCH!', 0.9); break;
       default: break;
     }
   }
@@ -342,6 +354,8 @@ function frame(now) {
   if (!state.paused) {
     state.time += dt;
     const input = controls.read(dt);
+    input.handbrake = handbrakeOn || controls.keys.has('h') ? 1 : 0;
+    $('btn-hb').classList.toggle('on', !!input.handbrake);
     updateNos(dt, input);
 
     // Surface under the car
@@ -404,6 +418,7 @@ function frame(now) {
       nitrous: nos.fx,
       rpm: d.rpm, load: d.running ? d.load : 0, throttle: d.throttle, running: d.running,
       cut: d.limiterCut, speed: vehicle.speed, scrub, offroad: state.offroad,
+      slideAngle: vehicle.slideAngle, slipSpeed: Math.abs(d.wheelW * SPEC.wheelRadius - vehicle.speed),
       gear: d.gear, shaftRpm: d.wheelW * SPEC.finalDrive * 60 / (2 * Math.PI),
     });
     hud.update({
@@ -420,7 +435,9 @@ function frame(now) {
   track.update(dt, camera);
   sky.update(dt, camera);
   renderer.render(scene, camera);
-  if (nos.fx > 0.02) speedBlur(nos.fx);
+  // Edge motion blur: full strength for NOS, a subtler version from raw speed (skipped in Battery saver)
+  const blurAmt = Math.max(nos.fx, HIGH ? state.speedFx * 0.5 : 0);
+  if (blurAmt > 0.02 && !state.paused) speedBlur(blurAmt);
 }
 
 // ---------------- Lap progress ----------------
@@ -531,6 +548,11 @@ function buildMenu() {
   $('btn-pause').addEventListener('click', () => pause(true));
   $('btn-cam').addEventListener('click', () => setCam(state.camMode + 1));
   $('btn-nos').addEventListener('pointerdown', (e) => { e.preventDefault(); toggleNos(); });
+  // Hand brake: hold to pull (multi-touch safe: tracks its own pointers)
+  const hbBtn = $('btn-hb'), hbPtrs = new Set();
+  const hbSet = () => { const was = handbrakeOn; handbrakeOn = hbPtrs.size > 0; if (handbrakeOn && !was) haptic(20); };
+  hbBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); hbPtrs.add(e.pointerId); hbBtn.setPointerCapture?.(e.pointerId); hbSet(); });
+  for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) hbBtn.addEventListener(ev, (e) => { hbPtrs.delete(e.pointerId); hbSet(); });
   setCam(state.camMode, false);
   $('btn-reset').addEventListener('click', resetCar);
   $('btn-start').addEventListener('click', crank);

@@ -4,6 +4,8 @@
 const RAD2RPM = 60 / (2 * Math.PI);
 const RPM2RAD = 1 / RAD2RPM;
 const SUBSTEPS = 4;
+const LAUNCH_RPM = 3500;      // launch-control two-step
+const LAUNCH_SLIP = 0.12;     // target rear slip during a launch: just past peak grip
 
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 const smoothstep = (a, b, x) => {
@@ -45,6 +47,11 @@ export class Drivetrain {
     this.powerSlide = 0;       // 0..1: 1st/2nd at full throttle — rear breaks loose
     this.stabilityCut = 0;     // set by the vehicle: throttle trimmed when the slide gets too big (TCS on)
     this.antiStall = 0;        // seconds of anti-stall protection left (set on wall impacts)
+    this.handbrake = 0;        // input: 1 while the hand brake is pulled
+    this.launchArmed = false;  // holding BRAKE + GAS at a standstill in 1st
+    this.launchTimer = 0;      // seconds of launch assistance left after the brake is released
+    this.launchClutch = 0;     // automated clutch ramp during the launch
+    this.launchFactor = 1;     // launch traction controller throttle multiplier
     this.nitrous = 0;          // input: 1 while the NOS solenoids are open
     this.nitrousAmt = 0;       // smoothed 0..1
     this.load = 0;             // effective combustion load 0..1 (for audio)
@@ -163,7 +170,34 @@ export class Drivetrain {
     // Power slide: flooring it in 1st or 2nd lights up the rears. Near the limiter the torque
     // kick breaks traction outright, so the revs hang on the limiter with the tyres spinning
     // instead of bouncing off it.
-    const lowGearWot = this.running && this.gear > 0 && this.gear <= 2 && this.throttleInput > 0.85;
+    // Launch control: BRAKE + GAS at a standstill in 1st arms a 3,500 rpm two-step with the clutch
+    // held open automatically; releasing the brake dumps the clutch over ~0.25 s while a slip
+    // controller keeps the rears right at peak grip (max bite, minimal wasted wheelspin).
+    const still = Math.abs(v) < 1.2;
+    if (this.running && this.gear === 1 && still && this.brakeInput > 0.5 && this.throttleInput > 0.5 && !this.handbrake) {
+      if (!this.launchArmed) { this.launchArmed = true; this.events.push('launchArmed'); }
+    } else if (this.launchArmed) {
+      this.launchArmed = false;
+      if (this.running && this.gear === 1 && this.brakeInput <= 0.5 && this.throttleInput > 0.5) {
+        this.launchTimer = 2.5; this.launchClutch = 0.3; this.launchFactor = 1;
+        this.events.push('launch');
+      }
+    }
+    if (this.launchTimer > 0) {
+      this.launchTimer -= dt;
+      if (this.throttleInput < 0.4 || this.brakeInput > 0.3 || this.gear < 1 || this.gear > 2) this.launchTimer = 0;
+      // Closed loop on rear slip: the clutch feeds in only as much torque as the tyres can take
+      // (and backs off if the revs sag), the throttle trims any excess
+      const err = this.slip - LAUNCH_SLIP;
+      if (err > 0) this.launchClutch = Math.max(0.15, this.launchClutch - dt * 8 * Math.min(1, err / 0.2));
+      else if (this.rpm > 2600) this.launchClutch = Math.min(1, this.launchClutch + dt * 3.5);
+      if (this.rpm < 2200) this.launchClutch = Math.max(0.15, this.launchClutch - dt * 4);
+      if (err > 0.05) this.launchFactor = Math.max(0.3, this.launchFactor - dt * 6 * Math.min(1, err / 0.3));
+      else this.launchFactor = Math.min(1, this.launchFactor + dt * 2.5);
+    } else this.launchFactor = 1;
+    const launching = this.launchTimer > 0;
+
+    const lowGearWot = this.running && this.gear > 0 && this.gear <= 2 && this.throttleInput > 0.85 && !launching;
     const nearLimiter = this.rpm > s.limiterRpm - 900;
     const slideTarget = lowGearWot ? (nearLimiter ? 1 : 0.6) : 0;
     this.powerSlide += (slideTarget - this.powerSlide) * Math.min(1, dt * (slideTarget > this.powerSlide ? 5 : 2.5));
@@ -178,7 +212,7 @@ export class Drivetrain {
       this.tcsFactor = Math.min(1, this.tcsFactor + dt * 2.5);
     }
     // Throttle body response
-    const target = this.throttleInput * this.tcsFactor * (1 - this.stabilityCut);
+    const target = this.throttleInput * (launching ? this.launchFactor : this.tcsFactor) * (1 - this.stabilityCut);
     this.throttle += (target - this.throttle) * Math.min(1, dt / 0.045);
 
     let engage = this.autoClutch ? this.autoEngagement(dt) : this.pedalEngagement();
@@ -192,10 +226,14 @@ export class Drivetrain {
         if (this.rpm < 1100) this.antiStall = Math.max(this.antiStall, 0.5);
       }
     }
+    if (this.launchArmed) engage = 0;
+    else if (launching) engage = this.launchClutch;
+    // Hand brake: the clutch opens automatically so locking the rears never stalls the engine
+    if (this.handbrake && this.gear !== 0) { engage = 0; this.antiStall = Math.max(this.antiStall, 1); }
     this.clutchEngage = engage;
     const Tcap = s.clutchMaxTorque * Math.pow(engage, 1.4);
     const G = this.ratio();
-    const brakeT = this.brakeInput * s.maxBrakeForce * (1 - s.brakeBiasFront) * r;
+    const brakeT = this.brakeInput * s.maxBrakeForce * (1 - s.brakeBiasFront) * r + this.handbrake * s.handbrakeTorque;
 
     // The torque kick breaks the rears loose; once they're spinning, full grip returns so the
     // spinning tyres still drive the car forward through the slide
@@ -220,6 +258,7 @@ export class Drivetrain {
         else if (cutAmt < 0.1) this.limiterCut = false;
         this.cutAmount = cutAmt;
         thr *= 1 - cutAmt;
+        if (this.launchArmed) thr = clamp((LAUNCH_RPM - rpm) / 300, 0, 1);   // two-step
         Te = this.fullTorque(rpm) * thr * nosMul - this.friction(rpm) * (1 - thr);
         load = thr;
       } else {
