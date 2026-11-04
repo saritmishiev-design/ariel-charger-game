@@ -1,0 +1,257 @@
+// Garage build → engine model, drivetrain and tyre spec. Pure math (no DOM) so the dyno, the
+// drag-strip simulation and the driving physics all use exactly the same numbers.
+import { Drivetrain } from './drivetrain.js';
+
+const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
+const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const PSI_ATM = 14.7;
+const HP = 745.7;   // W per mechanical hp
+
+/** The car as it ships: a 426-ci (7.0 L) blown Hemi V8 making ~700 hp. */
+export const STOCK = Object.freeze({
+  bore: 108, stroke: 95.3, cr: 9.0, cyl: 8, layout: 'V',
+  induction: 'sc', boost: 8,
+  trans: 'manual', gears: [2.95, 1.94, 1.34, 1.0, 0.8], final: 3.23,
+  tireFront: 225, tireRear: 275, tireDia: 27.0,
+});
+
+export const LIMITS = {
+  bore: [70, 115, 0.5], stroke: [60, 110, 0.5], cr: [7.5, 14, 0.1], boost: [3, 30, 0.5],
+  gear: [0.5, 4.5, 0.01], final: [2.2, 5.5, 0.01],
+  tireFront: [185, 335, 5], tireRear: [195, 355, 5], tireDia: [24, 30, 0.1],
+};
+export const CYLINDERS = [4, 6, 8, 10, 12];
+export const LAYOUTS = { V: 'V-engine', B: 'Boxer', I: 'Inline' };
+export const INDUCTION = { na: 'Naturally aspirated', turbo: 'Turbocharged', sc: 'Supercharged', twin: 'Twincharged' };
+export const TRANS = {
+  manual: { name: 'Manual', shiftTime: 0.25, gears: [2.95, 1.94, 1.34, 1.0, 0.8], final: 3.23 },
+  auto: { name: 'Automatic', shiftTime: 0.35, gears: [2.74, 1.54, 1.0, 0.8, 0.68], final: 3.23 },
+  dct: { name: 'Sequential DCT', shiftTime: 0.08, gears: [3.1, 2.1, 1.55, 1.2, 0.95], final: 3.55 },
+  drag: { name: 'Drag race', shiftTime: 0.04, gears: [2.6, 1.8, 1.35, 1.1, 1.0], final: 4.1 },
+};
+
+/** Which cylinder counts each layout can be built with (real-world configurations). */
+export function layoutAllows(layout, cyl) {
+  if (layout === 'I') return cyl <= 8;           // I4, I6, I8 — longer would not fit (or exist)
+  if (layout === 'B') return cyl !== 10;         // flat-4, flat-6, flat-8, flat-12
+  return true;                                    // V4 … V12
+}
+
+/** Clamp every field into range and repair impossible combinations. */
+export function sanitize(b) {
+  const o = { ...STOCK, ...(b || {}) };
+  for (const k of ['bore', 'stroke', 'cr', 'boost', 'final', 'tireFront', 'tireRear', 'tireDia']) {
+    const [lo, hi] = LIMITS[k];
+    o[k] = clamp(Number.isFinite(+o[k]) ? +o[k] : STOCK[k], lo, hi);
+  }
+  if (!CYLINDERS.includes(+o.cyl)) o.cyl = STOCK.cyl; else o.cyl = +o.cyl;
+  if (!LAYOUTS[o.layout]) o.layout = STOCK.layout;
+  if (!layoutAllows(o.layout, o.cyl)) o.layout = 'V';
+  if (!INDUCTION[o.induction]) o.induction = STOCK.induction;
+  if (!TRANS[o.trans]) o.trans = STOCK.trans;
+  const g = Array.isArray(o.gears) && o.gears.length === 5 ? o.gears : TRANS[o.trans].gears;
+  o.gears = g.map((x, i) => clamp(Number.isFinite(+x) ? +x : TRANS[o.trans].gears[i], LIMITS.gear[0], LIMITS.gear[1]));
+  return o;
+}
+
+// ---------------------------------------------------------------- engine model
+// Full-load brake torque = BMEP × displacement / 4π, with
+//  • BMEP from a naturally aspirated baseline, the compression ratio's Otto-cycle efficiency and
+//    a volumetric-efficiency curve shaped by bore/stroke (over-square engines peak higher),
+//  • boost as a pressure ratio (charge-cooled, ^0.85) with each device's own rpm behaviour:
+//    a Roots blower boosts from idle but costs crank power; a turbo spools up late (bigger
+//    boost / smaller engine = more lag) but is almost free; twincharging blends the two,
+//  • knock: effective compression = CR × PR^(1/γ). Past ~15.5 the ECU must retard timing.
+// Redline comes from mean piston speed (stroke) and valvetrain mass (bore).
+const BMEP_NA = 12.35e5;        // Pa, a healthy street/strip NA engine
+const PISTON_SPEED = 20.6;      // m/s mean piston speed at redline
+const KNOCK_CR = 15.5;         // effective CR an intercooled engine tolerates on pump fuel
+
+function otto(cr) { return 1 - Math.pow(cr, -0.3); }
+
+export function engineModel(input) {
+  const b = sanitize(input);
+  const boreM = b.bore / 1000, strokeM = b.stroke / 1000;
+  const disp = b.cyl * Math.PI / 4 * boreM * boreM * strokeM;          // m³
+  const dispL = disp * 1000;
+  const rodRatio = b.bore / b.stroke;
+  // Rev limits
+  const pistonLimit = PISTON_SPEED * 60 / (2 * strokeM);
+  const valveLimit = 9500 * Math.pow(86 / b.bore, 0.6);
+  const redline = Math.round(Math.min(pistonLimit, valveLimit, 10500) / 100) * 100;
+  const limiter = redline + 300;
+  // Volumetric efficiency vs x = rpm / redline
+  const xp = clamp(0.71 + 0.22 * (rodRatio - 1.133), 0.55, 0.85);       // torque peak position
+  const ve = (x) => {
+    if (x <= xp) return Math.max(0.12, 1 - 1.25 * Math.pow(xp - x, 1.63));
+    const d = x - xp, v = 1 - 2.3 * Math.pow(d, 2.2);
+    return Math.max(0.05, x > limiter / redline ? v - 3 * (x - limiter / redline) : v);
+  };
+  // Boost (pressure ratio − 1) vs x
+  const PR = 1 + b.boost / PSI_ATM;
+  const spoolStart = clamp(0.2 + 0.011 * b.boost - 0.025 * (dispL - 3), 0.12, 0.6);
+  const turbo = (x) => (PR - 1) * smooth(spoolStart, spoolStart + 0.22, x);
+  const blower = (x) => (PR - 1) * clamp(0.5 + 1.6 * x, 0, 1);
+  const boostAt = (x) => {
+    switch (b.induction) {
+      case 'turbo': return turbo(x);
+      case 'sc': return blower(x);
+      case 'twin': return Math.max(blower(x) * 0.6 * (1 - smooth(spoolStart, spoolStart + 0.22, x)), turbo(x));
+      default: return 0;
+    }
+  };
+  const lossAt = (x, bst) => {
+    // Crank power to drive the compressor (blower) or exhaust back-pressure (turbo)
+    if (b.induction === 'sc') return 0.13 * bst * x;
+    if (b.induction === 'twin') return 0.13 * bst * x * (1 - smooth(spoolStart, spoolStart + 0.22, x)) * 0.6 + 0.03 * bst;
+    if (b.induction === 'turbo') return 0.03 * bst;
+    return 0;
+  };
+  // Small cylinders breathe and burn a bit better per litre; more cylinders = more friction
+  const perCylL = dispL / b.cyl;
+  const sizeK = 1 + 0.05 * clamp(0.875 - perCylL, -0.5, 0.5);
+  const fricK = 1 - 0.006 * (b.cyl - 8) - (b.layout === 'B' ? -0.01 : 0);
+  const eta = otto(b.cr) / otto(10);
+  const torqueAt = (rpm) => {
+    const x = rpm / redline;
+    const bst = boostAt(x);
+    const prx = 1 + bst;
+    const crEff = b.cr * Math.pow(prx, 1 / 1.3);
+    const knock = crEff > KNOCK_CR ? Math.max(0.55, 1 - 0.07 * (crEff - KNOCK_CR)) : 1;
+    const t = BMEP_NA * disp / (4 * Math.PI) * eta * sizeK * fricK * ve(x) * Math.pow(prx, 0.85) * (1 - lossAt(x, bst)) * knock;
+    return { t: Math.max(0, t), pr: prx, knock };
+  };
+  // Tabulate (the drivetrain interpolates this table)
+  const curve = [], boostCurve = [];
+  let peakT = 0, peakTRpm = 0, peakP = 0, peakPRpm = 0, minKnock = 1;
+  const top = limiter + 600;
+  for (let rpm = 0; rpm <= top + 1; rpm += 100) {
+    const r = rpm === 0 ? 0 : torqueAt(rpm);
+    const t = rpm === 0 ? 0 : r.t * (rpm < 500 ? rpm / 500 : 1);
+    curve.push([rpm, Math.round(t * 10) / 10]);
+    boostCurve.push([rpm, rpm === 0 ? 1 : Math.round(r.pr * 1000) / 1000]);
+    if (rpm > 0) minKnock = Math.min(minKnock, r.knock);
+    if (rpm <= limiter) {
+      if (t > peakT) { peakT = t; peakTRpm = rpm; }
+      const p = t * rpm * Math.PI / 30;
+      if (p > peakP) { peakP = p; peakPRpm = rpm; }
+    }
+  }
+  // Engine mass: block + per-litre + per-cylinder, layout, induction hardware
+  const layoutK = { V: 1, I: 0.96, B: 1.04 }[b.layout];
+  const indKg = { na: 0, turbo: 28, sc: 32, twin: 55 }[b.induction];
+  const mass = (60 + 22 * dispL + 8 * b.cyl) * layoutK + indKg;
+  return {
+    build: b, disp, dispL, ci: dispL * 61.0237, redline, limiter, curve, boostCurve,
+    peakTorque: peakT, peakTorqueRpm: peakTRpm, peakHp: peakP / HP, peakHpRpm: peakPRpm,
+    boostPeakPsi: b.induction === 'na' ? 0 : (PR - 1) * PSI_ATM, knockLimited: minKnock < 0.97, knockLoss: 1 - minKnock,
+    mass, idleRpm: perCylL < 0.5 ? 950 : 850,
+    inertia: 0.3 * Math.pow(dispL / 6.98, 0.8) * (b.layout === 'B' ? 0.95 : 1),
+    frictionScale: Math.pow(dispL / 6.98, 0.85) * (1 + 0.01 * (b.cyl - 8)),
+    turbo: b.induction === 'turbo' || b.induction === 'twin',
+    blower: b.induction === 'sc' || b.induction === 'twin',
+  };
+}
+
+/** Physics spec for a build, derived from the base (stock car) spec. */
+export function deriveSpec(base, input) {
+  const b = sanitize(input);
+  const e = engineModel(b);
+  const stockEngine = engineModel(STOCK);
+  // Mass and weight distribution: the engine sits ~90 % over the front axle
+  const mass = base.mass - stockEngine.mass + e.mass;
+  const frontKg = base.mass * base.frontWeight - stockEngine.mass * 0.9 + e.mass * 0.9;
+  const r = b.tireDia * 0.0254 / 2;
+  const t = TRANS[b.trans];
+  const gripF = Math.pow(b.tireFront / STOCK.tireFront, 0.22);
+  const gripR = Math.pow(b.tireRear / STOCK.tireRear, 0.22);
+  return {
+    mass,
+    frontWeight: clamp(frontKg / mass, 0.45, 0.66),
+    cgHeight: base.cgHeight - (b.layout === 'B' ? 0.02 : 0),
+    wheelRadius: r,
+    tyreWidthFront: b.tireFront / 1000,
+    tyreWidthRear: b.tireRear / 1000,
+    tyreMu: base.tyreMu * gripR,                          // drive traction (rear tyres)
+    frictionSlipFront: base.frictionSlipFront * gripF,    // cornering grip per axle
+    frictionSlipRear: base.frictionSlipRear * gripR,
+    rollingResistance: base.rollingResistance * Math.sqrt((b.tireFront + b.tireRear) / (STOCK.tireFront + STOCK.tireRear)),
+    rearAxleInertia: base.rearAxleInertia * Math.pow(r / 0.343, 2) * (b.tireRear / STOCK.tireRear),
+    idleRpm: e.idleRpm, redlineRpm: e.redline, limiterRpm: e.limiter,
+    engineInertia: e.inertia, frictionScale: e.frictionScale,
+    torqueCurve: e.curve, boostCurve: e.turbo ? e.boostCurve : null,
+    clutchMaxTorque: Math.max(base.clutchMaxTorque, e.peakTorque * 1.8),
+    gears: b.gears.slice(), finalDrive: b.final,
+    transType: b.trans, shiftTime: t.shiftTime,
+    induction: b.induction, cylinders: b.cyl, layout: b.layout,
+    blower: e.blower, turbo: e.turbo,
+  };
+}
+
+/** Road speed (km/h) at the redline in each gear. */
+export function shiftSpeeds(spec) {
+  return spec.gears.map(g => spec.redlineRpm / 60 * 2 * Math.PI * spec.wheelRadius / (g * spec.finalDrive) * 3.6);
+}
+
+/** Cornering balance from the per-axle grip limits (1 = neutral). >1 understeer-safe, <1 oversteer. */
+export function balance(spec) {
+  return spec.frictionSlipRear / spec.frictionSlipFront;
+}
+
+/**
+ * Straight-line run with the real drivetrain model: launch control, shifts at the limiter with the
+ * transmission's own shift time, aero drag, rolling resistance and weight transfer.
+ * Returns { t100, t200, quarter: { t, kmh }, top, curveTrace }.
+ */
+export function dragRun(spec, maxTime = 60) {
+  const s = { ...spec };
+  const d = new Drivetrain(s);
+  const dt = 1 / 120, g = 9.81;
+  d.tractionControl = true;
+  d.autoClutch = s.transType !== 'manual';
+  d.running = true;
+  d.engineW = s.idleRpm * Math.PI / 30;
+  const L = 2.921;
+  let v = 0, x = 0, t = 0, a = 0, t100 = null, t200 = null, quarter = null, top = 0, shiftAt = -1, stillTop = 0;
+  d.gear = 1;
+  if (s.transType === 'auto') d.autoDrive = true;
+  // Arm launch control for 1 s
+  d.brakeInput = 1; d.throttleInput = 1; d.clutchPedal = 0;
+  for (let i = 0; i < 120; i++) { const N = s.mass * g * (1 - s.frontWeight); d.step(dt, 0, N, s.tyreMu); }
+  d.brakeInput = 0;
+  const trace = [];
+  while (t < maxTime) {
+    // Manual-style shifting at the limiter for every non-automatic box
+    // (shift on road-speed rpm: during a launch the engine sits on the limiter while the clutch slips)
+    const roadRpm = v / s.wheelRadius * s.gears[d.gear - 1] * s.finalDrive * 30 / Math.PI;
+    if (s.transType !== 'auto' && d.gear < 5 && roadRpm > s.redlineRpm - 50 && shiftAt < 0) {
+      shiftAt = t;
+      if (s.transType === 'manual') { d.clutchPedal = 1; d.throttleInput = 0; } else d.requestGear(d.gear + 1, v);
+    }
+    if (shiftAt >= 0 && s.transType === 'manual') {
+      if (t - shiftAt > s.shiftTime * 0.5 && d.clutchPedal === 1 && d.gear < 5 && d.throttleInput === 0) { d.requestGear(d.gear + 1, v); d.throttleInput = 0.0001; }
+      if (t - shiftAt > s.shiftTime) { d.clutchPedal = Math.max(0, 1 - (t - shiftAt - s.shiftTime) / 0.12); d.throttleInput = 1; if (d.clutchPedal === 0) shiftAt = -1; }
+    } else if (shiftAt >= 0 && t - shiftAt > s.shiftTime + 0.05) shiftAt = -1;
+    const N = Math.max(0, s.mass * g * (1 - s.frontWeight) + s.mass * a * s.cgHeight / L);
+    const F = d.step(dt, v, N, s.tyreMu);
+    const drag = 0.5 * 1.225 * s.dragCoefficient * s.frontalArea * v * v;
+    const roll = s.rollingResistance * s.mass * g * (v > 0.1 ? 1 : 0);
+    a = (F - drag - roll) / s.mass;
+    v = Math.max(0, v + a * dt); x += v * dt; t += dt;
+    const kmh = v * 3.6;
+    if (!t100 && kmh >= 100) t100 = t;
+    if (!t200 && kmh >= 200) t200 = t;
+    if (!quarter && x >= 402.3) quarter = { t, kmh };
+    if (kmh > top + 0.05) { top = kmh; stillTop = 0; } else if ((stillTop += dt) > 3 && quarter) break;
+    if (Math.round(t / dt) % 6 === 0) trace.push([t, kmh, d.gear]);
+    d.events.length = 0;
+  }
+  return { t100, t200, quarter, top, trace };
+}
+
+/** One-line summary for menus, e.g. "712 HP · 7.0 L V8 · BLOWN". */
+export function summary(e) {
+  const tag = { na: 'NA', turbo: 'TURBO', sc: 'BLOWN', twin: 'TWINCHARGED' }[e.build.induction];
+  const lay = e.build.layout === 'B' ? 'FLAT-' : e.build.layout === 'I' ? 'I' : 'V';
+  return `${Math.round(e.peakHp)} HP · ${e.dispL.toFixed(1)} L ${lay}${e.build.cyl} · ${tag}`;
+}

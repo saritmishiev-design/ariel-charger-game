@@ -9,6 +9,8 @@ import { AudioEngine } from './audio.js';
 import { HUD, fmtTime } from './hud.js';
 import { TyreSmoke, SkidMarks } from './effects.js';
 import { Sky, makeEnvMap, SUN_DIR, HORIZON } from './sky.js';
+import { STOCK, TRANS, sanitize, deriveSpec, engineModel, summary } from './build.js';
+import { Garage } from './garage.js';
 
 const $ = (id) => document.getElementById(id);
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
@@ -22,6 +24,16 @@ if (settings.tiltV !== DEFAULTS.tiltV) { settings.tilt = DEFAULTS.tilt; settings
 const saveSettings = () => { try { localStorage.setItem('charger.settings', JSON.stringify(settings)); } catch (e) { /* ignore */ } };
 let bestLap = null;
 try { bestLap = parseFloat(localStorage.getItem('charger.best')) || null; } catch (e) { /* ignore */ }
+
+// ---------------- Garage build → physics spec ----------------
+// The stock spec is kept as the base; the saved build replaces the engine, gearbox and tyres
+// before anything (physics, 3D model, HUD, audio) is created from SPEC.
+const BASE_SPEC = JSON.parse(JSON.stringify(SPEC));
+let build = sanitize(STOCK);
+try { build = sanitize(JSON.parse(localStorage.getItem('charger.build') || 'null')); } catch (e) { /* defaults */ }
+Object.assign(SPEC, deriveSpec(BASE_SPEC, build));
+const ENGINE = engineModel(build);
+const SEQ = SPEC.transType !== 'manual';
 
 // ---------------- Renderer & scene ----------------
 const HIGH = settings.gfx !== 'low';
@@ -87,7 +99,9 @@ const skids = new SkidMarks(scene);
 
 // ---------------- Audio / HUD / Controls ----------------
 const audio = new AudioEngine();
+audio.configure({ cyl: SPEC.cylinders, layout: SPEC.layout, blower: SPEC.blower, turbo: SPEC.turbo });
 const hud = new HUD();
+hud.setRange(SPEC.redlineRpm);
 hud.units = settings.units;
 
 const haptic = (p) => { try { if (navigator.vibrate) navigator.vibrate(p); } catch (e) { /* unsupported */ } };
@@ -97,6 +111,7 @@ const controls = new Controls({
     // Pedal input reaches the drivetrain on the next physics tick — sync it now
     const d = vehicle.drivetrain;
     d.clutchPedal = Math.max(d.clutchPedal, controls.clutchNow());
+    if (SPEC.transType === 'auto') d.autoDrive = g > 0;   // any forward gear on an automatic = D
     return d.requestGear(g, vehicle.speed);
   },
   onIgnition: () => crank(),
@@ -105,14 +120,17 @@ const controls = new Controls({
 
 function applySettings() {
   vehicle.drivetrain.tractionControl = settings.tcs;
-  vehicle.drivetrain.autoClutch = settings.auto;
+  // Sequential, DCT, drag and automatic boxes run their own clutch
+  vehicle.drivetrain.autoClutch = settings.auto || SEQ;
   controls.steerMode = settings.steer;
   controls.tiltRange = settings.tilt;
   hud.units = settings.units;
   audio.setVolume(settings.volume);
   car.setPaint(settings.paint);
   document.body.classList.toggle('touch-steer', settings.steer === 'touch');
-  document.body.classList.toggle('auto-clutch', settings.auto);
+  document.body.classList.toggle('auto-clutch', settings.auto || SEQ);
+  document.body.classList.toggle('seq', SEQ);
+  $('clutch-note').textContent = SEQ ? `(automatic with the ${TRANS[SPEC.transType].name} box)` : '';
   saveSettings();
 }
 
@@ -189,6 +207,7 @@ function resetCar() {
   const sp = track.spawnAt(state.trackIndex >= 0 ? state.trackIndex : 0);
   vehicle.reset(sp.x, sp.y, sp.z, sp.heading);
   vehicle.drivetrain.requestGear(0, 0);
+  vehicle.drivetrain.autoDrive = false;
   controls.forceNeutral();
   skids.last = [null, null, null, null];
   hud.toast('Car reset — select a gear', 1.6);
@@ -341,6 +360,8 @@ function processEvents() {
       case 'limiter': haptic(12); break;
       case 'launchArmed': haptic([15, 25, 15]); hud.toast('LAUNCH CONTROL · 3,500 RPM — release BRAKE to go!', 2.5); break;
       case 'launch': haptic(40); hud.toast('LAUNCH!', 0.9); break;
+      case 'bov': audio.blowOff(); break;
+      case 'denied': haptic([20, 40, 20]); hud.toast('Stop the car to change direction', 1.4); break;
       default: break;
     }
   }
@@ -424,7 +445,7 @@ function frame(now) {
     hud.update({
       dt, rpm: d.rpm, speed: vehicle.speed, gear: d.gear, running: d.running, cranking: d.starterTime > 0,
       lapTime: state.lapStart != null ? state.time - state.lapStart : null,
-      lastLap: state.lastLap, bestLap, lap: state.lap,
+      lastLap: state.lastLap, bestLap, lap: state.lap, autoDrive: d.autoDrive,
     });
     updateProgress();
     syncNosUi();
@@ -540,7 +561,7 @@ function buildMenu() {
   $('btn-go').addEventListener('click', onGo);
   $('btn-calibrate').addEventListener('click', () => { controls.calibrate(); hud.toast('Steering centred', 1.2); });
   $('btn-restart').addEventListener('click', () => {
-    placeAtStart(); vehicle.drivetrain.requestGear(0, 0); controls.forceNeutral(); skids.clear();
+    placeAtStart(); vehicle.drivetrain.requestGear(0, 0); vehicle.drivetrain.autoDrive = false; controls.forceNeutral(); skids.clear();
     state.lap = 0; state.lapStart = null; state.sector = 0; state.lastLap = null;
     nos.armed = false; nos.charge = 1;
     onGo();
@@ -603,7 +624,10 @@ async function onGo() {
     state.started = true;
     setTimeout(() => {
       crank();
-      hud.toast(settings.auto ? 'Tap 1 on the shifter, then GAS' : 'CLUTCH in → shift to 1 → ease off the clutch with GAS', 4);
+      const hint = SPEC.transType === 'auto' ? 'Tap ▲ for D, then GAS'
+        : SEQ ? 'Tap ▲ for 1st, then GAS'
+          : settings.auto ? 'Tap 1 on the shifter, then GAS' : 'CLUTCH in → shift to 1 → ease off the clutch with GAS';
+      hud.toast(hint, 4);
     }, 400);
   }
 }
@@ -630,12 +654,66 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && state.started) pause(!state.paused);
   if (e.key.toLowerCase() === 'c' && !state.paused) setCam(state.camMode + 1);
   if (e.key.toLowerCase() === 'x' && !state.paused) toggleNos();
+  if (SEQ && !state.paused && !e.repeat && (e.key.toLowerCase() === 'e' || e.key.toLowerCase() === 'q')) seqShift(e.key.toLowerCase() === 'e' ? 1 : -1);
   if (e.key.toLowerCase() === 't' && !state.paused) resetCar();
 });
 // Block page gestures (pinch zoom, pull-to-refresh, long-press menus) while playing
 document.addEventListener('touchmove', (e) => { if (document.body.classList.contains('playing')) e.preventDefault(); }, { passive: false });
 document.addEventListener('contextmenu', (e) => e.preventDefault());
 document.addEventListener('gesturestart', (e) => e.preventDefault());
+
+// ---------------- Sequential / automatic shifting ----------------
+function seqShift(dir) {
+  const d = vehicle.drivetrain, g = d.gear, sp = vehicle.speed;
+  let ok = true;
+  if (SPEC.transType === 'auto') {
+    // R ← N → D (the box picks 1-5 itself in D)
+    if (dir > 0) { if (g === -1) ok = d.requestGear(0, sp); else if (g === 0) { ok = d.requestGear(1, sp); if (ok) d.autoDrive = true; } }
+    else if (d.autoDrive || g > 0) { d.autoDrive = false; d.requestGear(0, sp); }
+    else if (g === 0) ok = d.requestGear(-1, sp);
+  } else if (dir > 0) {
+    if (g === -1) ok = d.requestGear(0, sp); else if (g < 5) ok = d.requestGear(g + 1, sp);
+  } else if (g > 1) ok = d.requestGear(g - 1, sp);
+  else if (g === 1) ok = d.requestGear(0, sp);
+  else if (g === 0) ok = d.requestGear(-1, sp);
+  haptic(ok ? 12 : [20, 40, 20]);
+  syncSeqLabels();
+}
+function syncSeqLabels() {
+  if (!SEQ) return;
+  const d = vehicle.drivetrain, g = d.gear;
+  const name = (x) => (x === -1 ? 'R' : x === 0 ? 'N' : SPEC.transType === 'auto' ? 'D' : String(x));
+  const up = SPEC.transType === 'auto' ? (g === -1 ? 0 : 1) : Math.min(5, g + 1);
+  const down = SPEC.transType === 'auto' ? (d.autoDrive || g > 0 ? 0 : -1) : Math.max(-1, g - 1);
+  $('seq-up-l').textContent = g >= 5 || (SPEC.transType === 'auto' && d.autoDrive) ? '—' : name(up);
+  $('seq-down-l').textContent = g === -1 ? '—' : name(down);
+}
+for (const [id, dir] of [['seq-up', 1], ['seq-down', -1]]) {
+  $(id).addEventListener('pointerdown', (e) => { e.preventDefault(); seqShift(dir); });
+}
+setInterval(syncSeqLabels, 250);
+
+// ---------------- Garage ----------------
+$('build-badge').textContent = `${summary(ENGINE)} · ${TRANS[build.trans].name.toUpperCase()}`;
+const garage = new Garage({
+  baseSpec: BASE_SPEC,
+  current: build,
+  onApply: (b, changed) => {
+    if (!changed) { garage.hide(); onGo(); return; }
+    try {
+      localStorage.setItem('charger.build', JSON.stringify(b));
+      sessionStorage.setItem('charger.newBuild', '1');
+    } catch (e) { /* private mode: applies for this session only */ }
+    location.reload();   // rebuild the car, physics, HUD and sound from the new spec
+  },
+});
+$('btn-garage').addEventListener('click', () => garage.show());
+try {
+  if (sessionStorage.getItem('charger.newBuild')) {
+    sessionStorage.removeItem('charger.newBuild');
+    $('menu-sub').textContent = 'NEW BUILD READY · TURN THE KEY';
+  }
+} catch (e) { /* ignore */ }
 
 buildMenu();
 applySettings();

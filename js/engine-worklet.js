@@ -14,6 +14,16 @@
 
 const FIRING_ORDER = [1, 8, 4, 3, 6, 5, 7, 2];
 
+// Which exhaust bank each firing goes to, per engine layout. The cross-plane V8 keeps its uneven
+// L-R-R-L-R-L-L-R pattern; other V engines alternate evenly; a boxer with unequal-length headers
+// pairs its pulses (the flat-four "rumble"); an inline engine has one manifold feeding both pipes.
+function bankPattern(cyl, layout) {
+  if (layout === 'V' && cyl === 8) return FIRING_ORDER.map(c => (c % 2 ? 0 : 1));
+  if (layout === 'B') return Array.from({ length: cyl }, (_, i) => (Math.floor(i / 2) % 2));
+  if (layout === 'I') return Array.from({ length: cyl }, () => 0);
+  return Array.from({ length: cyl }, (_, i) => i % 2);
+}
+
 class V8Processor extends AudioWorkletProcessor {
   static get parameterDescriptors() {
     return [
@@ -29,7 +39,9 @@ class V8Processor extends AudioWorkletProcessor {
     super();
     this.sr = sampleRate;
     this.seed = 0x9e3779b9;
-    this.bank = FIRING_ORDER.map(c => (c % 2 ? 0 : 1));
+    this.cyl = 8;
+    this.layout = 'V';
+    this.bank = bankPattern(8, 'V');
     // Near-side bank louder and fatter; far-side bank thinner and sharper
     this.bankGain = [1.0, 0.55];
     this.bankTau = [1.0, 0.6];
@@ -38,8 +50,9 @@ class V8Processor extends AudioWorkletProcessor {
     this.far = new Float32Array(1024);
     this.farPos = 0;
     // Per-cylinder personality: slightly different breathing & timing.
-    this.cylGain = FIRING_ORDER.map(() => 0.72 + this.rand() * 0.56);
-    this.cylTiming = FIRING_ORDER.map(() => (this.rand() - 0.5) * 0.1);
+    this.cylGain = Array.from({ length: 12 }, () => 0.72 + this.rand() * 0.56);
+    this.cylTiming = Array.from({ length: 12 }, () => (this.rand() - 0.5) * 0.1);
+    this.port.onmessage = (e) => this.configure(e.data);
     this.fireCount = 0;
     this.firePos = 0;              // in "firing intervals"
     this.nextAt = 1;
@@ -69,6 +82,16 @@ class V8Processor extends AudioWorkletProcessor {
 
     this.bodyPhase = 0;
     this.rpmS = 0; this.loadS = 0; this.popEnv = 0;
+  }
+
+  /** Engine layout from the garage: { cyl, layout }. */
+  configure({ cyl, layout }) {
+    this.cyl = cyl || 8;
+    this.layout = layout || 'V';
+    this.bank = bankPattern(this.cyl, this.layout);
+    // An inline engine's single manifold splits to both tailpipes: no far-bank thinning
+    this.bankGain = this.layout === 'I' ? [1.0, 0.0] : this.layout === 'B' ? [1.0, 0.75] : [1.0, 0.55];
+    this.fireCount = 0;
   }
 
   rand() {
@@ -115,7 +138,8 @@ class V8Processor extends AudioWorkletProcessor {
 
     // Pulse shapes scale with the firing interval (computed per block)
     // Wide, bass-heavy pulses that scale with the firing interval (computed per block)
-    const interval = 15 / Math.max(rpmT, 120);                    // seconds between firings
+    const fps = this.cyl / 120;                                    // firings per crank rpm per second
+    const interval = 1 / (Math.max(rpmT, 120) * fps);              // seconds between firings
     const tauA0 = Math.min(0.0028, Math.max(0.0008, interval * 0.3));
     const dA = [0, 0], dB = [0, 0];
     for (let b = 0; b < 2; b++) {
@@ -148,12 +172,12 @@ class V8Processor extends AudioWorkletProcessor {
       const load = load0 + (loadT - load0) * f;
 
       if (running && rpm > 60) {
-        this.firePos += rpm / 15 / sr;
+        this.firePos += rpm * fps / sr;
         if (this.firePos >= this.nextAt) {
-          const cyl = this.fireCount % 8;
+          const cyl = this.fireCount % this.cyl;
           this.fire(cyl, rpm, load, cut);
           this.fireCount++;
-          const nc = this.fireCount % 8;
+          const nc = this.fireCount % this.cyl;
           // Next nominal slot (round, not floor: an early fire must not schedule a double fire)
           this.nextAt = Math.round(this.firePos) + 1 + this.cylTiming[nc] * (0.4 + lopeBlk) + (this.rand() - 0.5) * 0.06 * lopeBlk;
           if (this.firePos > 1e6) { this.firePos -= 1e6; this.nextAt -= 1e6; }
@@ -188,12 +212,14 @@ class V8Processor extends AudioWorkletProcessor {
       this.far[this.farPos] = yr;
       yr = this.far[(this.farPos - this.farLen + 1024) & 1023];
       this.farPos = (this.farPos + 1) & 1023;
+      // Inline engine: one manifold, so both tailpipes carry the same (slightly softened) sound
+      if (this.layout === 'I') yr = yl * 0.85;
       // True dual exhaust: banks stay mostly separate (a little H-pipe cross-talk)
       let chL = yl * 0.88 + yr * 0.16;
       let chR = yr * 0.88 + yl * 0.16;
 
       // Fundamental "body" at firing frequency — weight on bigger speakers
-      this.bodyPhase += rpm / 15 / sr;
+      this.bodyPhase += rpm * fps / sr;
       if (this.bodyPhase > 1) this.bodyPhase -= 1;
       const body = running ? Math.sin(this.bodyPhase * 6.283185307) * (0.03 + load * 0.05) * Math.min(1, rpm / 600) : 0;
 

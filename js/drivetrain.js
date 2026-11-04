@@ -52,6 +52,9 @@ export class Drivetrain {
     this.launchTimer = 0;      // seconds of launch assistance left after the brake is released
     this.launchClutch = 0;     // automated clutch ramp during the launch
     this.launchFactor = 1;     // launch traction controller throttle multiplier
+    this.autoDrive = false;    // automatic transmission in D: the box picks gears 1-5 itself
+    this.spool = 0;            // turbo spool 0..1 (lags the throttle)
+    this.boostPsi = 0;         // current boost for the HUD/audio
     this.nitrous = 0;          // input: 1 while the NOS solenoids are open
     this.nitrousAmt = 0;       // smoothed 0..1
     this.load = 0;             // effective combustion load 0..1 (for audio)
@@ -76,6 +79,12 @@ export class Drivetrain {
   fullTorque(rpm) {
     const c = this.spec.torqueCurve;
     if (rpm <= c[0][0]) return c[0][1];
+    // Garage builds tabulate every 100 rpm: index directly
+    if (c.length > 20 && c[1][0] === 100) {
+      const i = Math.min(c.length - 2, Math.floor(rpm / 100));
+      const [r0, t0] = c[i], [r1, t1] = c[i + 1];
+      return t0 + (t1 - t0) * clamp((rpm - r0) / (r1 - r0), 0, 1);
+    }
     for (let i = 1; i < c.length; i++) {
       if (rpm <= c[i][0]) {
         const [r0, t0] = c[i - 1], [r1, t1] = c[i];
@@ -88,8 +97,19 @@ export class Drivetrain {
   friction(rpm) {
     if (rpm <= 0) return 0;
     const k = rpm / 1000;
-    return 22 + 11 * k + 1.3 * k * k;   // pumping + mechanical losses (engine braking)
+    return (22 + 11 * k + 1.3 * k * k) * (this.spec.frictionScale || 1);   // pumping + mechanical losses
   }
+
+  /** Steady-state boost pressure ratio at this rpm (turbo builds only). */
+  boostPR(rpm) {
+    const c = this.spec.boostCurve;
+    if (!c) return 1;
+    const i = Math.min(c.length - 2, Math.max(0, Math.floor(rpm / 100)));
+    const [r0, p0] = c[i], [r1, p1] = c[i + 1];
+    return p0 + (p1 - p0) * clamp((rpm - r0) / (r1 - r0), 0, 1);
+  }
+
+  get sequential() { return this.spec.transType && this.spec.transType !== 'manual'; }
 
   pedalEngagement() {
     return 1 - smoothstep(0.25, 0.8, this.clutchPedal);
@@ -115,6 +135,17 @@ export class Drivetrain {
     else if (g === -1 && speed > 1.5) { this.events.push('grind'); return false; }
     else if (g > 0 && speed < -2.5) { this.events.push('grind'); return false; }
 
+    if (this.sequential) {
+      // Sequential / automatic boxes: no grinding — the gearbox controller handles the clutch.
+      // Shifts interrupt drive for the box's shift time (DCT ~80 ms, air-shifted drag box ~40 ms).
+      // The controller refuses reverse while rolling forward (and vice versa).
+      if ((g === -1 && speed > 1.5) || (g > 0 && speed < -1.5)) { this.events.push('denied'); return false; }
+      const up = g > this.gear;
+      if (this.gear > 0 && g > 0) this.shiftTimer = this.spec.shiftTime || 0.1;
+      this.gear = g;
+      this.events.push(up ? 'shiftUp' : 'shiftDown');
+      return true;
+    }
     const disengaged = this.autoClutch || this.pedalEngagement() < 0.2;
     if (!disengaged) {
       // Clutchless shift only if revs are matched to the new gear.
@@ -197,6 +228,30 @@ export class Drivetrain {
     } else this.launchFactor = 1;
     const launching = this.launchTimer > 0;
 
+    // Automatic gearbox: shift points move with throttle (short-shifts when cruising, holds to the
+    // redline flat out), kick-down when the driver floors it, back to 1st when stopping
+    if (this.autoCool > 0) this.autoCool -= dt;
+    if (this.autoDrive && this.running && this.gear >= 1 && this.shiftTimer <= 0 && !this.launchArmed && !(this.autoCool > 0)) {
+      // Decide on road speed (spinning tyres or an open clutch would fool an rpm reading)
+      const roadRpm = (g) => Math.abs(v) / s.wheelRadius * s.gears[g - 1] * s.finalDrive * RAD2RPM;
+      const thr = this.throttleInput, red = s.redlineRpm, rpm = roadRpm(this.gear);
+      const up = 2300 + (red - 150 - 2300) * Math.pow(thr, 1.4);
+      const lowerRpm = this.gear > 1 ? roadRpm(this.gear - 1) : Infinity;
+      const wantDown = rpm < 1150 + 1500 * thr || (thr > 0.85 && lowerRpm < red * 0.8);
+      if (this.gear < 5 && rpm > up) { this.requestGear(this.gear + 1, v); this.autoCool = 0.8; }
+      else if (this.gear > 1 && wantDown && lowerRpm < up - 700) { this.requestGear(this.gear - 1, v); this.autoCool = 0.6; }
+    }
+
+    // Turbo spool lags the throttle (blow-off valve vents when you lift on boost)
+    if (s.boostCurve) {
+      const want = this.running && this.gear !== 0 ? clamp(this.throttleInput * 1.3 - 0.15, 0, 1) : 0;
+      const before = this.spool;
+      this.spool += (want - this.spool) * Math.min(1, dt / (want > this.spool ? 0.55 : 0.18));
+      if (before > 0.55 && this.throttleInput < 0.15 && !this.bovLatch) { this.bovLatch = true; this.events.push('bov'); }
+      if (this.throttleInput > 0.5) this.bovLatch = false;
+      this.boostPsi = (this.boostPR(this.rpm) - 1) * this.spool * 14.7;
+    }
+
     const lowGearWot = this.running && this.gear > 0 && this.gear <= 2 && this.throttleInput > 0.85 && !launching;
     const nearLimiter = this.rpm > s.limiterRpm - 900;
     const slideTarget = lowGearWot ? (nearLimiter ? 1 : 0.6) : 0;
@@ -259,7 +314,11 @@ export class Drivetrain {
         this.cutAmount = cutAmt;
         thr *= 1 - cutAmt;
         if (this.launchArmed) thr = clamp((LAUNCH_RPM - rpm) / 300, 0, 1);   // two-step
-        Te = this.fullTorque(rpm) * thr * nosMul - this.friction(rpm) * (1 - thr);
+        if (this.sequential && this.shiftTimer > 0) thr = 0;                    // ignition cut mid-shift
+        // Turbo lag: only the spooled fraction of the steady-state boost is available
+        let lag = 1;
+        if (s.boostCurve) { const pr = this.boostPR(rpm); lag = Math.pow((1 + (pr - 1) * this.spool) / pr, 0.85); }
+        Te = this.fullTorque(rpm) * lag * thr * nosMul - this.friction(rpm) * (1 - thr);
         load = thr;
       } else {
         Te = -this.friction(rpm) - (rpm > 1 ? 25 : 0);

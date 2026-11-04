@@ -23,6 +23,19 @@ export class AudioEngine {
     this.lastImpact = 0;
     this.lastImpactS = 0;
     this.watch = { ctxT: 0, wall: 0, stuck: false };
+    this.engineCfg = { cyl: 8, layout: 'V', blower: true, turbo: false };
+  }
+
+  /** Engine build from the garage (cylinders, layout, induction hardware). */
+  configure(cfg) {
+    this.engineCfg = { ...this.engineCfg, ...cfg };
+    this.sendEngineCfg();
+  }
+
+  sendEngineCfg() {
+    const c = { cyl: this.engineCfg.cyl, layout: this.engineCfg.layout };
+    if (this.engine && this.engine.port) this.engine.port.postMessage(c);
+    else if (this.fallbackProc) this.fallbackProc.configure(c);
   }
 
   /** Smoothly move an AudioParam toward v with time constant tc (s). */
@@ -168,6 +181,14 @@ export class AudioEngine {
     this.nosG = ctx.createGain(); this.nosG.gain.value = 0;
     noise().connect(this.nosF).connect(this.nosG).connect(this.master);
 
+    // Turbo: compressor whistle + intake whoosh rising with spool, blow-off valve chuff on lift
+    this.turboOsc = ctx.createOscillator(); this.turboOsc.type = 'sine';
+    this.turboOscG = ctx.createGain(); this.turboOscG.gain.value = 0;
+    this.turboOsc.connect(this.turboOscG).connect(this.master); this.turboOsc.start();
+    this.turboNF = ctx.createBiquadFilter(); this.turboNF.type = 'bandpass'; this.turboNF.Q.value = 2.5;
+    this.turboNG = ctx.createGain(); this.turboNG.gain.value = 0;
+    noise().connect(this.turboNF).connect(this.turboNG).connect(this.master);
+
     // Transmission whine (straight-cut-ish gear noise)
     this.gearOsc = ctx.createOscillator(); this.gearOsc.type = 'sine';
     this.gearG = ctx.createGain(); this.gearG.gain.value = 0;
@@ -192,6 +213,7 @@ export class AudioEngine {
         gain: this.engine.parameters.get('gain'),
       };
       this.engine.connect(this.engineBus);
+      this.sendEngineCfg();
     } catch (err) {
       // Fallback: run the same DSP in a ScriptProcessor
       const code = await (await fetch(url)).text();
@@ -199,6 +221,8 @@ export class AudioEngine {
       class AWP { constructor() { this.port = { postMessage() {}, onmessage: null }; } }
       new Function('AudioWorkletProcessor', 'registerProcessor', 'sampleRate', code)(AWP, (n, c) => { Proc = c; }, ctx.sampleRate);
       const proc = new Proc();
+      this.fallbackProc = proc;
+      this.sendEngineCfg();
       const vals = { rpm: [0], load: [0], running: [0], cut: [0], gain: [1] };
       const sp = ctx.createScriptProcessor(1024, 0, 2);
       sp.onaudioprocess = (e) => {
@@ -280,8 +304,16 @@ export class AudioEngine {
     this.ramp(this.whine.frequency, Math.max(20, blowerHz), tc);
     this.ramp(this.whine2.frequency, Math.max(20, blowerHz * 2.01), tc);
     this.ramp(this.whineF.frequency, Math.max(60, blowerHz * 1.3), tc);
-    const boost = s.running ? (0.012 + load * 0.05) * Math.pow(clamp(rpm / 6500, 0, 1.1), 1.6) : 0;
+    const boost = s.running && this.engineCfg.blower ? (0.012 + load * 0.05) * Math.pow(clamp(rpm / 6500, 0, 1.1), 1.6) : 0;
     this.ramp(this.whineG.gain, boost, 0.05);
+
+    // Turbo whistle follows shaft speed (≈ spool × boost)
+    const spool = this.engineCfg.turbo && s.running ? clamp(s.spool || 0, 0, 1) : 0;
+    const bst = clamp((s.boostPsi || 0) / 20, 0, 1.5);
+    this.ramp(this.turboOsc.frequency, 1800 + 7000 * spool * (0.4 + 0.6 * Math.min(1, bst)), 0.05);
+    this.ramp(this.turboOscG.gain, spool * spool * 0.02 * (0.5 + bst), 0.05);
+    this.ramp(this.turboNF.frequency, 900 + 2600 * spool, 0.05);
+    this.ramp(this.turboNG.gain, spool * 0.07 * (0.4 + bst), 0.05);
 
     // Tyres (silent on grass, where the rumble layer takes over)
     const onGrass = s.offroad ? 1 : 0;
@@ -339,6 +371,13 @@ export class AudioEngine {
     src.stop(t + dur + 0.05);
     AudioEngine.cleanup(src, [src, f, g]);
     return { f, g, src };
+  }
+
+  blowOff() {
+    if (!this.ready) return;
+    // pssh-tututu: a sharp vent then a fluttering tail
+    this.burst(0.4, { type: 'highpass', freq: 1500, q: 0.7, gain: 0.35, attack: 0.005 });
+    this.burst(0.25, { type: 'bandpass', freq: 3800, q: 2, gain: 0.18, attack: 0.003, rate: 0.6 });
   }
 
   shift(up) {

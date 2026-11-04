@@ -31,6 +31,13 @@ A mobile-first, physics-based 3D driving game (PWA). A 1979 Dodge Charger with a
   **Battery saver** in the menu lowers resolution, shadow detail and scenery density.
 - **For Ariel, from Sarit:** "Love, your wife Sarit" billboards beside the fast sections, bold yellow "Nissan Sentra"
   boards in the heavy braking zones of the slow corners, a 7-second lap-complete banner and a pause screen message.
+- **Garage & dyno:** build the engine (bore, stroke, compression, 4/6/8/10/12 cylinders, V / boxer / inline),
+  forced induction (NA, turbo with lag and blow-off, Roots blower, twincharged, boost level, knock limit),
+  gearbox (manual H-pattern, automatic, sequential DCT, air-shifted drag box; every ratio and the final drive)
+  and tyres (front/rear width, diameter: grip, balance, gearing and the 3D wheels). The dyno plots the
+  power/torque curves live; RUN SIMULATION does a dyno pull and a drag-strip run with the real drivetrain
+  (0-100, 0-200, ¼ mile, top speed). The same model (js/build.js) drives the car on track: torque curve,
+  redline/limiter, inertia, friction, weight and distribution, shift behaviour, grip, tach and engine sound.
 - **Launch control:** hold BRAKE + GAS at a standstill in 1st → 3,500 rpm two-step; release the brake and a
   closed-loop clutch/throttle keeps the rears at peak slip (0-100 km/h ≈ 4.2 s vs ≈ 5.6 s dumping the clutch).
   Hard launches (and nitrous starts) lift the front wheels for a moment.
@@ -63,6 +70,7 @@ index.html, css/style.css      UI shell, HUD, pedals, shifter, menu
 js/main.js                     bootstrap, loop, camera, laps, menus
 js/config.js                   car spec & tuning
 js/drivetrain.js               engine / clutch / gearbox / rear axle model
+js/build.js, garage.js         garage build → engine model & spec, dyno + drag-strip sim, garage UI
 js/vehicle.js                  cannon-es raycast vehicle + steering, brakes, aero
 js/carModel.js                 procedural 3D Charger
 js/track.js                    circuit, road, curbs, barriers, grandstands

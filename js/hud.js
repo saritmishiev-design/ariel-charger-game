@@ -1,6 +1,4 @@
 // Tachometer (canvas), speed, gear, shift lights, lap timing, toasts.
-const MAX_RPM = 8000;
-const RED = 6500;
 
 export function fmtTime(t) {
   if (t == null || !isFinite(t)) return '--:--.---';
@@ -24,6 +22,7 @@ export class HUD {
     this.startBtn = document.getElementById('btn-start');
     this.toastTimer = 0;
     this.units = 'kmh';
+    this.setRange(6500);
     this.resize();
     window.addEventListener('resize', () => this.resize());
   }
@@ -38,9 +37,16 @@ export class HUD {
     this.bg = null;
   }
 
+  /** Tach scale for the engine's redline (garage builds rev from ~5,600 to ~10,500 rpm). */
+  setRange(redline) {
+    this.red = redline;
+    this.maxRpm = Math.ceil((redline + 1200) / 1000) * 1000;
+    this.bg = null;
+  }
+
   angleFor(rpm) {
     const a0 = Math.PI * 0.75, a1 = Math.PI * 2.25;
-    return a0 + (a1 - a0) * Math.min(rpm, MAX_RPM) / MAX_RPM;
+    return a0 + (a1 - a0) * Math.min(rpm, this.maxRpm) / this.maxRpm;
   }
 
   drawBackground() {
@@ -56,19 +62,20 @@ export class HUD {
     g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.stroke();
     // redline arc
     g.strokeStyle = '#e0141e'; g.lineWidth = s * 0.05;
-    g.beginPath(); g.arc(cx, cy, R * 0.86, this.angleFor(RED), this.angleFor(MAX_RPM)); g.stroke();
+    g.beginPath(); g.arc(cx, cy, R * 0.86, this.angleFor(this.red), this.angleFor(this.maxRpm)); g.stroke();
     // ticks
-    for (let r = 0; r <= MAX_RPM; r += 250) {
+    const tick = this.maxRpm > 9000 ? 500 : 250;
+    for (let r = 0; r <= this.maxRpm; r += tick) {
       const a = this.angleFor(r), major = r % 1000 === 0;
       const r0 = R * (major ? 0.74 : 0.8), r1 = R * 0.9;
-      g.strokeStyle = r >= RED ? '#ff4040' : '#e8e8e8';
+      g.strokeStyle = r >= this.red ? '#ff4040' : '#e8e8e8';
       g.lineWidth = major ? 2.4 : 1;
       g.beginPath();
       g.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0);
       g.lineTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1);
       g.stroke();
       if (major) {
-        g.fillStyle = r >= RED ? '#ff4040' : '#f0f0f0';
+        g.fillStyle = r >= this.red ? '#ff4040' : '#f0f0f0';
         g.font = `600 ${Math.round(s * 0.085)}px system-ui, sans-serif`;
         g.textAlign = 'center'; g.textBaseline = 'middle';
         g.fillText(String(r / 1000), cx + Math.cos(a) * R * 0.6, cy + Math.sin(a) * R * 0.6);
@@ -99,14 +106,14 @@ export class HUD {
     const sp = Math.abs(t.speed) * (this.units === 'mph' ? 2.23694 : 3.6);
     this.speedEl.textContent = Math.round(sp);
     this.unitEl.textContent = this.units === 'mph' ? 'MPH' : 'KM/H';
-    const gear = t.gear === -1 ? 'R' : t.gear === 0 ? 'N' : String(t.gear);
+    const gear = t.gear === -1 ? 'R' : t.gear === 0 ? 'N' : t.autoDrive ? `D${t.gear}` : String(t.gear);
     if (this.gearEl.textContent !== gear) this.gearEl.textContent = gear;
 
-    // Shift lights: 5000 → 6400 rpm, flash at limiter
-    const n = this.lights.length;
-    const flash = t.rpm > 6400 && (performance.now() % 160) < 80;
+    // Shift lights: from 1,500 rpm below the redline, flashing at the redline
+    const n = this.lights.length, red = this.red;
+    const flash = t.rpm > red - 100 && (performance.now() % 160) < 80;
     this.lights.forEach((el, i) => {
-      const th = 5000 + i * (1400 / (n - 1));
+      const th = red - 1500 + i * (1400 / (n - 1));
       el.className = t.rpm >= th ? (flash ? 'flash' : i < 2 ? 'g' : i < 4 ? 'y' : 'r') : '';
     });
 

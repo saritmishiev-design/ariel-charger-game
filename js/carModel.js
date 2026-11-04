@@ -117,14 +117,21 @@ export class CarModel {
       p.rotation.x = Math.atan2(0.78, 0.41);   // follow the windshield rake
     }
 
-    // ---- Hood: power bulge + 6-71 blower with scoop
+    // ---- Hood: power bulge, plus the 6-71 blower and scoop when the build has a supercharger
     add(new THREE.BoxGeometry(0.75, 0.05, 1.6), this.paint, 0, Y(0.92), -1.15);
-    add(new THREE.BoxGeometry(0.46, 0.2, 0.62), chrome, 0, Y(1.05), -1.0);
-    for (let i = 0; i < 5; i++) add(new THREE.BoxGeometry(0.48, 0.018, 0.64), black, 0, Y(0.98 + i * 0.035), -1.0, false);
-    const scoop = add(new THREE.BoxGeometry(0.42, 0.16, 0.5), black, 0, Y(1.23), -1.04);
-    scoop.rotation.x = 0.06;
-    add(new THREE.BoxGeometry(0.36, 0.1, 0.02), new THREE.MeshBasicMaterial({ color: 0x020202 }), 0, Y(1.24), -1.3, false);
-    for (const s of [-1, 1]) add(new THREE.BoxGeometry(0.04, 0.13, 0.03), chrome, s * 0.1, Y(1.24), -1.3, false);
+    if (spec.blower !== false) {
+      add(new THREE.BoxGeometry(0.46, 0.2, 0.62), chrome, 0, Y(1.05), -1.0);
+      for (let i = 0; i < 5; i++) add(new THREE.BoxGeometry(0.48, 0.018, 0.64), black, 0, Y(0.98 + i * 0.035), -1.0, false);
+      const scoop = add(new THREE.BoxGeometry(0.42, 0.16, 0.5), black, 0, Y(1.23), -1.04);
+      scoop.rotation.x = 0.06;
+      add(new THREE.BoxGeometry(0.36, 0.1, 0.02), new THREE.MeshBasicMaterial({ color: 0x020202 }), 0, Y(1.24), -1.3, false);
+      for (const s of [-1, 1]) add(new THREE.BoxGeometry(0.04, 0.13, 0.03), chrome, s * 0.1, Y(1.24), -1.3, false);
+    } else {
+      // NA / turbo: a low shaker-style scoop on the bulge
+      const sh = add(new THREE.BoxGeometry(0.5, 0.09, 0.55), black, 0, Y(1.0), -1.1);
+      sh.rotation.x = 0.04;
+      add(new THREE.BoxGeometry(0.4, 0.06, 0.02), new THREE.MeshBasicMaterial({ color: 0x020202 }), 0, Y(1.01), -1.38, false);
+    }
 
     // ---- Front end
     add(new THREE.BoxGeometry(1.62, 0.3, 0.06), black, 0, Y(0.62), zF - 0.02);

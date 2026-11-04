@@ -77,6 +77,10 @@
         <b style="left:16.67%;top:94%">2</b><b style="left:50%;top:94%">4</b><b style="left:83.33%;top:94%" class="rev">R</b>
         <div id="knob"></div>
       </div>
+      <div id="seqshift" aria-label="Sequential shifter">
+        <button id="seq-up" aria-label="Shift up">▲<small id="seq-up-l">UP</small></button>
+        <button id="seq-down" aria-label="Shift down">▼<small id="seq-down-l">DOWN</small></button>
+      </div>
       <div class="pedal gas" id="pedal-gas"><div class="fill"></div><span>GAS</span><em></em></div>
     </div>
   </div>
@@ -89,7 +93,7 @@
       </div>
 
       <header>
-        <div class="badge">700 HP · HEMI V8 · 5-SPEED · RWD</div>
+        <div class="badge" id="build-badge">700 HP · HEMI V8 · 5-SPEED · RWD</div>
         <h1>ARIEL'S <span>'79 CHARGER</span></h1>
         <p id="menu-sub">ARIEL RACEWAY · 3.6 KM</p>
         <p id="build"></p>
@@ -109,7 +113,7 @@
           <input type="range" id="set-tilt" min="22" max="55" step="1">
         </div>
         <div class="setting">
-          <label>Clutch</label>
+          <label>Clutch <small id="clutch-note"></small></label>
           <div class="seg" id="set-auto"><button data-v="0">Manual pedal</button><button data-v="1">Auto-clutch</button></div>
         </div>
         <div class="setting">
@@ -132,6 +136,7 @@
 
       <div class="actions">
         <button id="btn-go" class="primary">TURN THE KEY</button>
+        <button id="btn-garage" class="ghost garage-btn">🔧 GARAGE &amp; DYNO</button>
         <button id="btn-restart" class="ghost paused-only">RESTART RACE</button>
         <button id="btn-settings" class="ghost paused-only">SETTINGS</button>
         <button id="btn-calibrate" class="ghost paused-only">CENTER TILT</button>
@@ -152,6 +157,32 @@
           <li>Keyboard: W/S/A/D or arrows · Space = clutch · 1-5, R, N · I = ignition · C = camera · X = NOS · H = hand brake · T = reset · Esc = menu.</li>
         </ul>
       </details>
+    </div>
+  </div>
+
+  <!-- ===== Garage & dyno ===== -->
+  <div id="garage" aria-label="Garage and dyno">
+    <header class="g-top">
+      <button id="g-back" class="ghost">‹ BACK</button>
+      <h2>GARAGE <span>&amp; DYNO</span></h2>
+      <button id="g-stock" class="ghost">STOCK</button>
+      <button id="g-apply" class="primary">DRIVE</button>
+    </header>
+    <div class="g-body">
+      <div class="g-col g-left"></div>
+      <div class="g-col g-right">
+        <section class="g-card g-dyno-card">
+          <h3>DYNO<small>engine power &amp; torque vs rpm · dashed = stock</small></h3>
+          <div class="g-peaks">
+            <div><small>PEAK POWER</small><b id="g-hp">0</b><em>hp</em><small id="g-hp-rpm"></small></div>
+            <div><small>PEAK TORQUE</small><b id="g-tq">0</b><em>Nm</em><small id="g-tq-rpm"></small></div>
+            <div><small>POWER / WEIGHT</small><b id="g-pw">0</b><em>hp/t</em></div>
+          </div>
+          <canvas id="g-dyno"></canvas>
+          <button id="g-run" class="primary g-run">▶ RUN SIMULATION</button>
+          <div id="g-results" class="g-results"></div>
+        </section>
+      </div>
     </div>
   </div>
 
