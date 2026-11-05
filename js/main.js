@@ -1,16 +1,18 @@
 import * as THREE from '../vendor/three.module.min.js';
 import * as CANNON from '../vendor/cannon-es.js';
-import { SPEC, PHYSICS_DT, WALL_CONTACT, BUILD } from './config.js';
+import { PHYSICS_DT, WALL_CONTACT, BUILD } from './config.js';
 import { Vehicle } from './vehicle.js';
 import { CarModel, PAINTS } from './carModel.js';
-import { Track, ROAD_HALF } from './track.js';
+import { Track, TERRAIN_GROUP, DRAG_LENGTH } from './track.js';
 import { Controls } from './controls.js';
 import { AudioEngine } from './audio.js';
 import { HUD, fmtTime } from './hud.js';
 import { TyreSmoke, SkidMarks } from './effects.js';
 import { Sky, makeEnvMap, SUN_DIR, HORIZON } from './sky.js';
-import { STOCK, TRANS, sanitize, deriveSpec, engineModel, summary } from './build.js';
+import { STOCK, TRANS, sanitize } from './build.js';
 import { Garage } from './garage.js';
+import { CARS, TRACKS, sanitizeSetup, carSpec, carSummary } from './cars.js';
+import { PreGame } from './pregame.js';
 
 const $ = (id) => document.getElementById(id);
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
@@ -22,18 +24,28 @@ try { settings = { ...DEFAULTS, ...JSON.parse(localStorage.getItem('charger.sett
 // Tilt calibration changed (v5): move any saved value onto the new scale once
 if (settings.tiltV !== DEFAULTS.tiltV) { settings.tilt = DEFAULTS.tilt; settings.tiltV = DEFAULTS.tiltV; }
 const saveSettings = () => { try { localStorage.setItem('charger.settings', JSON.stringify(settings)); } catch (e) { /* ignore */ } };
-let bestLap = null;
-try { bestLap = parseFloat(localStorage.getItem('charger.best')) || null; } catch (e) { /* ignore */ }
 
-// ---------------- Garage build → physics spec ----------------
-// The stock spec is kept as the base; the saved build replaces the engine, gearbox and tyres
-// before anything (physics, 3D model, HUD, audio) is created from SPEC.
-const BASE_SPEC = JSON.parse(JSON.stringify(SPEC));
+// ---------------- Setup: track, car, tunes (picked in the pre-game garage) ----------------
+let setup = sanitizeSetup(null);
+try { setup = sanitizeSetup(JSON.parse(localStorage.getItem('charger.setup') || 'null')); } catch (e) { /* defaults */ }
+const saveSetup = () => { try { localStorage.setItem('charger.setup', JSON.stringify(setup)); } catch (e) { /* ignore */ } };
+// The Charger's engine-builder build (Garage & Dyno)
 let build = sanitize(STOCK);
 try { build = sanitize(JSON.parse(localStorage.getItem('charger.build') || 'null')); } catch (e) { /* defaults */ }
-Object.assign(SPEC, deriveSpec(BASE_SPEC, build));
-const ENGINE = engineModel(build);
-const SEQ = SPEC.transType !== 'manual';
+
+// Best lap / best ET per track and car (the old single best lap belonged to the classic Charger)
+const bestKey = () => `charger.best.${setup.track}.${setup.car}`;
+try {
+  const old = localStorage.getItem('charger.best');
+  if (old && !localStorage.getItem('charger.best.classic.charger')) localStorage.setItem('charger.best.classic.charger', old);
+} catch (e) { /* ignore */ }
+let bestLap = null;
+const loadBest = () => { try { bestLap = parseFloat(localStorage.getItem(bestKey())) || null; } catch (e) { bestLap = null; } };
+
+// Filled in by prepareSpec() / buildWorld() once the player hits RACE
+let SPEC = null, ENGINE = null, CAR_BUILD = null, SEQ = false;
+let track = null, vehicle = null, car = null, smoke = null, skids = null, built = false;
+const COCKPIT_EYE = new THREE.Vector3(), HOOD_EYE = new THREE.Vector3();
 
 // ---------------- Renderer & scene ----------------
 const HIGH = settings.gfx !== 'low';
@@ -72,6 +84,9 @@ scene.add(sun, sun.target);
 // ---------------- Physics ----------------
 const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.81, 0) });
 world.broadphase = new CANNON.SAPBroadphase(world);
+// Box tests, not bounding spheres: the barrier bodies are long chains of panels whose bounding
+// sphere (centred on the world origin) would put every one of them in contact with the car
+world.broadphase.useBoundingBoxes = true;
 world.solver.iterations = 10;
 world.allowSleep = false;
 const materials = {
@@ -81,27 +96,13 @@ const materials = {
 };
 world.addContactMaterial(new CANNON.ContactMaterial(materials.chassis, materials.wall, WALL_CONTACT));
 world.addContactMaterial(new CANNON.ContactMaterial(materials.chassis, materials.ground, { friction: 0.45, restitution: 0.02 }));
-const groundBody = new CANNON.Body({ mass: 0, material: materials.ground });
-groundBody.addShape(new CANNON.Plane());
-groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
-world.addBody(groundBody);
 
-const track = new Track(scene, world, materials, settings.gfx);
-const vehicle = new Vehicle(world, SPEC, materials);
-const car = new CarModel(vehicle, envMap);
-scene.add(car.root, car.contact);
-car.setPaint(settings.paint);
-
-const smoke = new TyreSmoke(scene, HIGH ? 700 : 360, SUN_DIR);
-const SMOKE_RATE = HIGH ? 85 : 55;   // puffs per second per rear tyre at full wheelspin
-const smokeAcc = [0, 0];
-const skids = new SkidMarks(scene);
+const SMOKE_RATE = HIGH ? 85 : 55;   // puffs per second per driven tyre at full wheelspin
+const smokeAcc = [0, 0, 0, 0];
 
 // ---------------- Audio / HUD / Controls ----------------
 const audio = new AudioEngine();
-audio.configure({ cyl: SPEC.cylinders, layout: SPEC.layout, blower: SPEC.blower, turbo: SPEC.turbo });
 const hud = new HUD();
-hud.setRange(SPEC.redlineRpm);
 hud.units = settings.units;
 
 const haptic = (p) => { try { if (navigator.vibrate) navigator.vibrate(p); } catch (e) { /* unsupported */ } };
@@ -119,18 +120,21 @@ const controls = new Controls({
 });
 
 function applySettings() {
-  vehicle.drivetrain.tractionControl = settings.tcs;
-  // Sequential, DCT, drag and automatic boxes run their own clutch
-  vehicle.drivetrain.autoClutch = settings.auto || SEQ;
+  if (vehicle) {
+    vehicle.drivetrain.tractionControl = settings.tcs;
+    // Sequential, DCT, drag and automatic boxes run their own clutch
+    vehicle.drivetrain.autoClutch = settings.auto || SEQ;
+  }
   controls.steerMode = settings.steer;
   controls.tiltRange = settings.tilt;
   hud.units = settings.units;
   audio.setVolume(settings.volume);
-  car.setPaint(settings.paint);
+  if (car) car.setPaint(settings.paint);
   document.body.classList.toggle('touch-steer', settings.steer === 'touch');
   document.body.classList.toggle('auto-clutch', settings.auto || SEQ);
   document.body.classList.toggle('seq', SEQ);
   $('clutch-note').textContent = SEQ ? `(automatic with the ${TRANS[SPEC.transType].name} box)` : '';
+  $('tcs-note').textContent = SPEC ? `(raw ${Math.round(ENGINE.peakHp)} hp)` : '';
   saveSettings();
 }
 
@@ -138,14 +142,13 @@ function applySettings() {
 const state = {
   started: false, paused: true, camMode: settings.cam | 0,
   lap: 0, lapStart: null, lastLap: null, sector: 0, trackIndex: -1,
-  upsideTimer: 0, offroad: false, time: 0, speedFx: 0,
+  upsideTimer: 0, offroad: false, time: 0, simTime: 0, speedFx: 0,
 };
 const CAM_MODES = ['chase', 'cockpit', 'hood'];
 const CAM_LABELS = { chase: 'CHASE', cockpit: 'COCKPIT', hood: 'HOOD' };
 const CAM_NAMES = { chase: 'Chase cam', cockpit: 'Cockpit view', hood: 'Hood / bumper cam' };
-// Eye points in the car body's frame (origin = centre of mass, forward = -Z)
-const COCKPIT_EYE = new THREE.Vector3(-0.36, 0.66, 0.82);   // driver's head, behind the wheel
-const HOOD_EYE = new THREE.Vector3(0, 0.5, -2.0);           // low on the bonnet near the nose
+// Eye points (COCKPIT_EYE, HOOD_EYE) are in the car body's frame (origin = centre of mass,
+// forward = -Z), set per car in buildWorld()
 const COCKPIT_TILT = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.06);
 function setCam(i, announce = true) {
   state.camMode = ((i % CAM_MODES.length) + CAM_MODES.length) % CAM_MODES.length;
@@ -199,35 +202,39 @@ function syncNosUi() {
 }
 
 function placeAtStart() {
-  const sp = track.spawn(14);
+  // Drag strip: front wheels just behind the start line; circuits: on the grid behind the lap line
+  const sp = track.spawn(track.isDrag ? -vehicle.frontAxleZ + 0.3 : 14);
+  if (track.isDrag) {
+    // Spawn points are 2 m apart: slide along the strip so the front wheels sit exactly 0.3 m short of the line
+    const t = track.tangents[track.startIndex], s0 = track.along(sp.x, sp.z) + (-vehicle.frontAxleZ);
+    const k = -0.3 - s0;
+    sp.x += t.x * k; sp.z += t.z * k;
+  }
   vehicle.reset(sp.x, sp.y, sp.z, sp.heading);
   state.trackIndex = sp.index;
+  camInit = false;   // snap the camera instead of swooping across the map
 }
 function resetCar() {
-  const sp = track.spawnAt(state.trackIndex >= 0 ? state.trackIndex : 0);
-  vehicle.reset(sp.x, sp.y, sp.z, sp.heading);
+  if (track.isDrag) {
+    placeAtStart();
+    dragReset();
+    hud.toast('Staged — select a gear, wait for green', 1.8);
+  } else {
+    const sp = track.spawnAt(state.trackIndex >= 0 ? state.trackIndex : 0);
+    vehicle.reset(sp.x, sp.y, sp.z, sp.heading);
+    camInit = false;
+    hud.toast('Car reset — select a gear', 1.6);
+  }
   vehicle.drivetrain.requestGear(0, 0);
   vehicle.drivetrain.autoDrive = false;
   controls.forceNeutral();
   skids.last = [null, null, null, null];
-  hud.toast('Car reset — select a gear', 1.6);
 }
-placeAtStart();
 
 function crank() {
   const r = vehicle.drivetrain.start();
   if (r === 'clutch') hud.toast('Press the CLUTCH (or select N) to start', 2.2);
 }
-
-// Collisions → sound + haptics
-vehicle.body.addEventListener('collide', (e) => {
-  const v = Math.abs(e.contact.getImpactVelocityAlongNormal());
-  if (e.body !== groundBody) vehicle.wallHit(v);
-  if (v > 1.5 && e.body !== groundBody) {
-    audio.impact(v / 14);
-    haptic(Math.min(80, 15 + v * 4));
-  }
-});
 
 // ---------------- Camera ----------------
 const camPos = new THREE.Vector3();
@@ -275,10 +282,11 @@ function updateCamera(dt) {
     if (!camInit) { camPos.copy(desired); camLook.copy(look); camInit = true; }
     camPos.lerp(desired, 1 - Math.exp(-dt * 7));
     camLook.lerp(look, 1 - Math.exp(-dt * 12));
-    if (camPos.y < 0.6) camPos.y = 0.6;
+    const gy = track.height(camPos.x, camPos.z);
+    if (camPos.y < gy + 0.6) camPos.y = gy + 0.6;
     camera.position.copy(camPos);
     // Engine shake near redline
-    const shake = Math.pow(clamp(vehicle.rpm / 6800, 0, 1), 4) * 0.025 * (vehicle.drivetrain.load + 0.2) + nos.fx * 0.03;
+    const shake = Math.pow(clamp(vehicle.rpm / SPEC.limiterRpm, 0, 1), 4) * 0.025 * (vehicle.drivetrain.load + 0.2) + nos.fx * 0.03;
     camera.position.x += (Math.random() - 0.5) * shake + buzzX * 0.035;
     camera.position.y += (Math.random() - 0.5) * shake + buzzY * 0.03;
     camera.lookAt(camLook);
@@ -289,7 +297,7 @@ function updateCamera(dt) {
   // Shadow camera follows the car, centred a little ahead and snapped to whole texels (no shimmer)
   const texel = (SHADOW_HALF * 2) / SHADOW_SIZE;
   const c = tmpS.copy(p).addScaledVector(fwd, SHADOW_HALF * 0.45);
-  c.x = Math.round(c.x / texel) * texel; c.z = Math.round(c.z / texel) * texel; c.y = 0;
+  c.x = Math.round(c.x / texel) * texel; c.z = Math.round(c.z / texel) * texel; c.y = track.height(c.x, c.z);
   sun.position.copy(c).addScaledVector(SUN_DIR, 150);
   sun.target.position.copy(c);
 }
@@ -308,7 +316,7 @@ function updateLap(idx) {
         state.lastLap = lt;
         if (!bestLap || lt < bestLap) {
           bestLap = lt;
-          try { localStorage.setItem('charger.best', String(lt)); } catch (e) { /* ignore */ }
+          try { localStorage.setItem(bestKey(), String(lt)); } catch (e) { /* ignore */ }
           hud.toast(`NEW BEST  ${fmtTime(lt)}`, 3);
         } else hud.toast(`LAP  ${fmtTime(lt)}`, 2.5);
         state.lap++;
@@ -327,14 +335,105 @@ function updateLap(idx) {
 
 // Every completed lap: a 4-second reminder of the real prize
 let bannerTimer = null;
-function showLapBanner() {
+function showLapBanner(drag = false) {
   const el = $('lap-banner');
+  el.querySelector('p').innerHTML = drag
+    ? "<b>Great run!</b> But don't forget your wife, Sarit, is your real ultimate prize."
+    : "<b>Great lap!</b> But don't forget your wife, Sarit, is your real ultimate prize.";
   el.classList.remove('show');
   void el.offsetWidth;   // restart the animation
   el.classList.add('show');
   haptic([30, 60, 30]);
   clearTimeout(bannerTimer);
   bannerTimer = setTimeout(() => el.classList.remove('show'), 7000);   // matches the 7 s CSS animation
+}
+
+// ---------------- Drag strip: Christmas tree + timing ----------------
+// Stage with the front wheels just behind the line, engine running and a gear in: the ambers count
+// down 0.5 s apart, then green. The clock starts when the front wheels cross the start line and
+// stops at 402.336 m (interpolated between physics steps, so it's good to the millisecond).
+const DRAG_SPLITS = [['60 FT', 18.288], ['330 FT', 100.584], ['1/8 MILE', 201.168], ['1000 FT', 304.8]];
+const drag = {
+  phase: 'idle', staged: 0, treeT: 0, greenAt: null, startT: null, along: 0, splits: [], rt: null,
+  foul: false, runs: 0, lastEt: null, result: null, tree: { stage: false, amber: 0, green: false, red: false },
+};
+const _fa = new THREE.Vector3(), _faQ = new THREE.Quaternion();
+function frontAlong() {
+  const b = vehicle.body;
+  _faQ.set(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w);
+  _fa.set(0, 0, vehicle.frontAxleZ).applyQuaternion(_faQ);
+  return track.along(b.position.x + _fa.x, b.position.z + _fa.z);
+}
+function dragReset() {
+  Object.assign(drag, { phase: 'idle', staged: 0, greenAt: null, startT: null, splits: [], rt: null, foul: false, result: null });
+  drag.along = frontAlong();
+  drag.tree = { stage: false, amber: 0, green: false, red: false };
+  $('drag-result').classList.remove('show');
+}
+function dragStep() {
+  const t = state.simTime, pa = drag.along, a = frontAlong(), d = vehicle.drivetrain;
+  drag.along = a;
+  const cross = (thr) => (pa < thr && a >= thr ? t - PHYSICS_DT * (a - thr) / Math.max(1e-6, a - pa) : null);
+  const T = drag.tree;
+  const inStage = a > -1.5 && a <= 0.05;
+  if (drag.phase === 'idle' || drag.phase === 'tree' || drag.phase === 'green') {
+    const ready = inStage && Math.abs(vehicle.speed) < 0.5 && d.running && d.gear > 0;
+    if (drag.phase === 'idle') {
+      T.stage = inStage;
+      T.green = T.red = false; T.amber = 0;
+      drag.staged = ready ? drag.staged + PHYSICS_DT : 0;
+      if (drag.staged > 0.7) { drag.phase = 'tree'; drag.treeT = t; }
+    } else if (drag.phase === 'tree') {
+      const e = t - drag.treeT;
+      T.amber = Math.min(3, Math.floor(e / 0.5) + 1);
+      if (e >= 1.5) { drag.phase = 'green'; drag.greenAt = drag.treeT + 1.5; T.amber = 0; T.green = true; }
+      if (a < -2.5) drag.phase = 'idle';     // rolled back out of the beams
+    }
+    const tc = cross(0);
+    if (tc != null) {
+      drag.foul = drag.phase === 'tree';    // left before the green: red light
+      drag.rt = drag.greenAt != null ? tc - drag.greenAt : null;
+      if (drag.foul) { T.red = true; T.amber = 0; }
+      drag.startT = tc; drag.splits = []; drag.phase = 'run';
+    }
+  } else if (drag.phase === 'run') {
+    for (const [label, dist] of DRAG_SPLITS) {
+      if (drag.splits.some(x => x[0] === label)) continue;
+      const c = cross(dist);
+      if (c != null) drag.splits.push([label, c - drag.startT]);
+    }
+    const fin = cross(DRAG_LENGTH);
+    if (fin != null) {
+      drag.phase = 'done';
+      drag.result = { et: fin - drag.startT, trap: Math.abs(vehicle.speed), rt: drag.rt, foul: drag.foul, splits: drag.splits.slice(), shown: false };
+    } else if (t - drag.startT > 90 || a < -3) dragReset();
+  }
+}
+const fmtSpeed = (ms) => (settings.units === 'mph' ? `${(ms * 2.23694).toFixed(1)} MPH` : `${(ms * 3.6).toFixed(1)} KM/H`);
+function dragFrame() {
+  const T = drag.tree;
+  track.setTree(T);
+  const lamps = document.querySelectorAll('#dragtree i');
+  lamps.forEach((l, i) => l.classList.toggle('on', i === 0 ? T.stage : i <= 3 ? T.amber >= i : i === 4 ? T.green : T.red));
+  const r = drag.result;
+  if (!r || r.shown) return;
+  r.shown = true;
+  drag.runs++;
+  drag.lastEt = r.et;
+  let best = false;
+  if (!r.foul && (!bestLap || r.et < bestLap)) {
+    bestLap = r.et; best = true;
+    try { localStorage.setItem(bestKey(), String(r.et)); } catch (e) { /* ignore */ }
+  }
+  track.setTimingBoard({ et: r.et, trap: fmtSpeed(r.trap) });
+  const res = $('drag-result');
+  res.innerHTML = `<h4>${r.foul ? '<span class="red">RED LIGHT</span>' : best ? 'NEW BEST' : `RUN ${drag.runs}`}</h4>
+    <div class="dr-et"><b>${r.et.toFixed(3)}</b><small>s</small></div><div class="dr-trap">${fmtSpeed(r.trap)}</div>
+    <ul>${r.rt != null ? `<li><span>REACTION</span><b>${r.rt.toFixed(3)}</b></li>` : ''}${r.splits.map(([l, v]) => `<li><span>${l}</span><b>${v.toFixed(3)}</b></li>`).join('')}</ul>
+    <p>Tap ↺ RESET to stage again</p>`;
+  res.classList.add('show');
+  haptic([30, 60, 30]);
+  if (!r.foul) showLapBanner(true);
 }
 
 // ---------------- Main loop ----------------
@@ -360,7 +459,7 @@ function processEvents() {
       case 'limiter': haptic(12); break;
       case 'launchArmed': haptic([15, 25, 15]); hud.toast('LAUNCH CONTROL · 3,500 RPM — release BRAKE to go!', 2.5); break;
       case 'launch': haptic(40); hud.toast('LAUNCH!', 0.9); break;
-      case 'bov': audio.blowOff(); break;
+      case 'bov': audio.blowOff(vehicle.drivetrain.boostPsi / 15); break;
       case 'denied': haptic([20, 40, 20]); hud.toast('Stop the car to change direction', 1.4); break;
       default: break;
     }
@@ -371,84 +470,12 @@ function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
+  if (!built) return;
 
   if (!state.paused) {
-    state.time += dt;
     const input = controls.read(dt);
     input.handbrake = handbrakeOn || controls.keys.has('h') ? 1 : 0;
-    $('btn-hb').classList.toggle('on', !!input.handbrake);
-    updateNos(dt, input);
-
-    // Surface under the car
-    const b = vehicle.body;
-    const q = track.query(b.position.x, b.position.z, state.trackIndex);
-    const edge = ROAD_HALF + 1.3;
-    if (q.dist < edge) { vehicle.surfaceMu = 1; vehicle.surfaceDrag = 1; state.offroad = false; }
-    else if (q.dist < edge + 2.2) { vehicle.surfaceMu = 0.85; vehicle.surfaceDrag = 2.5; state.offroad = true; }
-    else { vehicle.surfaceMu = 0.62; vehicle.surfaceDrag = 7; state.offroad = true; }
-    updateLap(q.index);
-
-    acc += dt;
-    let steps = 0;
-    while (acc >= PHYSICS_DT && steps < 8) {
-      vehicle.update(PHYSICS_DT, input);
-      world.step(PHYSICS_DT);
-      acc -= PHYSICS_DT;
-      steps++;
-    }
-    if (steps === 8) acc = 0;
-    processEvents();
-
-    // Auto-recover if upside down
-    if (vehicle.isUpsideDown()) {
-      state.upsideTimer += dt;
-      if (state.upsideTimer > 2.5) { state.upsideTimer = 0; resetCar(); }
-    } else state.upsideTimer = 0;
-
-    // Tyre smoke & skid marks
-    const scrub = vehicle.tyreScrub();
-    const wi = vehicle.vehicle.wheelInfos;
-    const longSlip = Math.abs(vehicle.drivetrain.slip);
-    const rx = Math.cos(Math.atan2(b.velocity.x, b.velocity.z)), rz = -Math.sin(Math.atan2(b.velocity.x, b.velocity.z));
-    // Spinning rears throw smoke backwards (opposite the car's nose)
-    tmpQ.set(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w);
-    const nose = tmpF.set(0, 0, -1).applyQuaternion(tmpQ);
-    const spinDir = Math.sign(vehicle.drivetrain.wheelW || 1);
-    const smokeAmt = clamp(Math.max((longSlip - 0.18) * 1.5, (scrub - 0.5) * 2), 0, 1);
-    for (let i = 0; i < 4; i++) {
-      const w = wi[i];
-      if (!w.raycastResult.body) { skids.add(i, 0, 0, 0, 0, 0, 0); continue; }
-      const hp = w.raycastResult.hitPointWorld;
-      const rear = i >= 2;
-      const strength = rear ? scrub : (w.sliding ? Math.min(1, vehicle.lateralSlip / 6) : 0);
-      const onTarmac = !state.offroad;
-      skids.add(i, hp.x, hp.z, rx, rz, rear ? SPEC.tyreWidthRear : SPEC.tyreWidthFront, onTarmac ? strength : 0);
-      if (rear && onTarmac && smokeAmt > 0) {
-        // Rate-based emission so the cloud density doesn't depend on frame rate
-        smokeAcc[i - 2] += dt * SMOKE_RATE * (0.35 + 0.65 * smokeAmt);
-        while (smokeAcc[i - 2] >= 1) {
-          smokeAcc[i - 2] -= 1;
-          smoke.emit(hp.x, 0.25, hp.z, b.velocity.x, b.velocity.z, 0.45 + 0.55 * smokeAmt, -nose.x * spinDir, -nose.z * spinDir);
-        }
-      } else if (rear) smokeAcc[i - 2] = 0;
-    }
-    smoke.update(dt);
-
-    const d = vehicle.drivetrain;
-    audio.update({
-      nitrous: nos.fx,
-      rpm: d.rpm, load: d.running ? d.load : 0, throttle: d.throttle, running: d.running,
-      cut: d.limiterCut, speed: vehicle.speed, scrub, offroad: state.offroad,
-      slideAngle: vehicle.slideAngle, slipSpeed: Math.abs(d.wheelW * SPEC.wheelRadius - vehicle.speed),
-      gear: d.gear, shaftRpm: d.wheelW * SPEC.finalDrive * 60 / (2 * Math.PI),
-    });
-    hud.update({
-      dt, rpm: d.rpm, speed: vehicle.speed, gear: d.gear, running: d.running, cranking: d.starterTime > 0,
-      lapTime: state.lapStart != null ? state.time - state.lapStart : null,
-      lastLap: state.lastLap, bestLap, lap: state.lap, autoDrive: d.autoDrive,
-    });
-    updateProgress();
-    syncNosUi();
+    tick(dt, input);
   }
 
   car.sync(state.paused ? 0 : dt);
@@ -461,18 +488,108 @@ function frame(now) {
   if (blurAmt > 0.02 && !state.paused) speedBlur(blurAmt);
 }
 
+/** One frame of game logic (physics, timing, effects, sound, HUD) — everything but rendering. */
+function tick(dt, input) {
+  state.time += dt;
+  $('btn-hb').classList.toggle('on', !!input.handbrake);
+  updateNos(dt, input);
+
+  // Surface under the car
+  const b = vehicle.body;
+  const q = track.query(b.position.x, b.position.z, state.trackIndex);
+  const edge = track.half + 1.3;
+  if (q.dist < edge) { vehicle.surfaceMu = 1; vehicle.surfaceDrag = 1; state.offroad = false; }
+  else if (q.dist < edge + 2.2) { vehicle.surfaceMu = 0.85; vehicle.surfaceDrag = 2.5; state.offroad = true; }
+  else { vehicle.surfaceMu = 0.62; vehicle.surfaceDrag = 7; state.offroad = true; }
+  if (!track.isDrag) updateLap(q.index); else state.trackIndex = q.index;
+
+  acc += dt;
+  let steps = 0;
+  while (acc >= PHYSICS_DT && steps < 8) {
+    vehicle.update(PHYSICS_DT, input);
+    world.step(PHYSICS_DT);
+    state.simTime += PHYSICS_DT;
+    if (track.isDrag) dragStep();
+    acc -= PHYSICS_DT;
+    steps++;
+  }
+  if (steps === 8) acc = 0;
+  processEvents();
+  if (track.isDrag) dragFrame();
+
+  // Auto-recover if upside down, or somehow outside the barriers / below the ground
+  if (vehicle.isUpsideDown()) {
+    state.upsideTimer += dt;
+    if (state.upsideTimer > 2.5) { state.upsideTimer = 0; resetCar(); }
+  } else state.upsideTimer = 0;
+  if (q.dist > 60 || b.position.y < track.height(b.position.x, b.position.z) - 3) resetCar();
+
+  // Tyre smoke & skid marks
+  const scrub = vehicle.tyreScrub();
+  const wi = vehicle.vehicle.wheelInfos;
+  const longSlip = Math.abs(vehicle.drivetrain.slip);
+  const rx = Math.cos(Math.atan2(b.velocity.x, b.velocity.z)), rz = -Math.sin(Math.atan2(b.velocity.x, b.velocity.z));
+  // Spinning rears throw smoke backwards (opposite the car's nose)
+  tmpQ.set(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w);
+  const nose = tmpF.set(0, 0, -1).applyQuaternion(tmpQ);
+  const spinDir = Math.sign(vehicle.drivetrain.wheelW || 1);
+  const smokeAmt = clamp(Math.max((longSlip - 0.18) * 1.5, (scrub - 0.5) * 2), 0, 1);
+  for (let i = 0; i < 4; i++) {
+    const w = wi[i];
+    if (!w.raycastResult.body) { skids.add(i, 0, 0, 0, 0, 0, 0); continue; }
+    const hp = w.raycastResult.hitPointWorld;
+    const driven = vehicle.driven.includes(i);
+    // Driven tyres mark (and smoke) from wheelspin, the hand-braked rears from locking, the others from sliding
+    const strength = driven || (i >= 2 && handbrakeOn) ? scrub : (w.sliding ? Math.min(1, vehicle.lateralSlip / 6) : 0);
+    const onTarmac = !state.offroad;
+    skids.add(i, hp.x, hp.z, rx, rz, i >= 2 ? SPEC.tyreWidthRear : SPEC.tyreWidthFront, onTarmac ? strength : 0, hp.y);
+    if (driven && onTarmac && smokeAmt > 0) {
+      // Rate-based emission so the cloud density doesn't depend on frame rate (AWD: shared by 4 tyres)
+      smokeAcc[i] += dt * SMOKE_RATE * (0.35 + 0.65 * smokeAmt) * (vehicle.driven.length > 2 ? 0.6 : 1);
+      while (smokeAcc[i] >= 1) {
+        smokeAcc[i] -= 1;
+        smoke.emit(hp.x, hp.y + 0.25, hp.z, b.velocity.x, b.velocity.z, 0.45 + 0.55 * smokeAmt, -nose.x * spinDir, -nose.z * spinDir);
+      }
+    } else smokeAcc[i] = 0;
+  }
+  smoke.update(dt);
+
+  const d = vehicle.drivetrain;
+  audio.update({
+    nitrous: nos.fx,
+    rpm: d.rpm, load: d.running ? d.load : 0, throttle: d.throttle, running: d.running,
+    cut: d.limiterCut, speed: vehicle.speed, scrub, offroad: state.offroad,
+    slideAngle: vehicle.slideAngle, slipSpeed: Math.abs(d.wheelW * SPEC.wheelRadius - vehicle.speed),
+    gear: d.gear, shaftRpm: d.wheelW * SPEC.finalDrive * 60 / (2 * Math.PI),
+    spool: d.spool, boostPsi: d.boostPsi,
+  });
+  hud.update(track.isDrag ? {
+    dt, rpm: d.rpm, speed: vehicle.speed, gear: d.gear, running: d.running, cranking: d.starterTime > 0,
+    lapTime: drag.phase === 'run' ? state.simTime - drag.startT : drag.lastEt,
+    lastLap: drag.lastEt, bestLap, lap: drag.runs, autoDrive: d.autoDrive,
+  } : {
+    dt, rpm: d.rpm, speed: vehicle.speed, gear: d.gear, running: d.running, cranking: d.starterTime > 0,
+    lapTime: state.lapStart != null ? state.time - state.lapStart : null,
+    lastLap: state.lastLap, bestLap, lap: state.lap, autoDrive: d.autoDrive,
+  });
+  updateProgress();
+  syncNosUi();
+}
+
 // ---------------- Lap progress ----------------
 let progShown = -1;
 function updateProgress() {
   const N = track.N;
-  const frac = state.lapStart == null ? 0 : clamp(state.trackIndex / N, 0, 1);
+  const frac = track.isDrag
+    ? clamp(drag.along / DRAG_LENGTH, 0, 1)
+    : state.lapStart == null ? 0 : clamp(state.trackIndex / N, 0, 1);
   const pct = Math.floor(frac * 100);
   if (Math.abs(frac - progShown) < 0.002) return;
   progShown = frac;
   $('prog-fill').style.width = `${(frac * 100).toFixed(1)}%`;
   $('prog-car').style.left = `${(frac * 100).toFixed(1)}%`;
   $('prog-pct').textContent = `${pct}%`;
-  const left = (1 - frac) * track.length;
+  const left = (1 - frac) * (track.isDrag ? DRAG_LENGTH : track.length);
   $('prog-left').textContent = settings.units === 'mph'
     ? `${(left / 1609.34).toFixed(2)} MI TO GO` : left >= 1000 ? `${(left / 1000).toFixed(2)} KM TO GO` : `${Math.round(left)} M TO GO`;
 }
@@ -518,7 +635,7 @@ function resize() {
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
-  smoke.setViewportHeight(h * renderer.getPixelRatio());
+  if (smoke) smoke.setViewportHeight(h * renderer.getPixelRatio());
 }
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 250));
@@ -558,14 +675,17 @@ function buildMenu() {
   $('btn-settings').addEventListener('click', () => menu.classList.toggle('show-settings'));
   $('set-tilt').addEventListener('input', (e) => { settings.tilt = +e.target.value; applySettings(); });
   $('set-vol').addEventListener('input', (e) => { settings.volume = +e.target.value; applySettings(); });
-  $('btn-go').addEventListener('click', onGo);
+  $('btn-go').addEventListener('click', () => { if (built) onGo(); else closeSettings(); });
   $('btn-calibrate').addEventListener('click', () => { controls.calibrate(); hud.toast('Steering centred', 1.2); });
   $('btn-restart').addEventListener('click', () => {
     placeAtStart(); vehicle.drivetrain.requestGear(0, 0); vehicle.drivetrain.autoDrive = false; controls.forceNeutral(); skids.clear();
     state.lap = 0; state.lapStart = null; state.sector = 0; state.lastLap = null;
     nos.armed = false; nos.charge = 1;
+    if (track.isDrag) dragReset();
     onGo();
   });
+  // Back to the pre-game garage: the world is built for one car and track, so start a fresh page
+  $('btn-garage').addEventListener('click', () => { saveSetup(); location.reload(); });
   $('btn-pause').addEventListener('click', () => pause(true));
   $('btn-cam').addEventListener('click', () => setCam(state.camMode + 1));
   $('btn-nos').addEventListener('pointerdown', (e) => { e.preventDefault(); toggleNos(); });
@@ -591,10 +711,91 @@ function syncMenu() {
   segSet('set-gfx', settings.gfx);
   $('set-tilt').value = settings.tilt;
   $('set-vol').value = settings.volume;
-  $('best-lap').textContent = bestLap ? fmtTime(bestLap) : '—';
+  $('best-lap').textContent = bestLap ? (track && track.isDrag ? `${bestLap.toFixed(3)} s` : fmtTime(bestLap)) : '—';
 }
 
-async function onGo() {
+// Settings page opened from the pre-game garage (before the world exists)
+function openSettings() {
+  pregame.hide();
+  $('btn-go').textContent = '‹ BACK TO GARAGE';
+  $('menu-title').innerHTML = 'GAME <span>SETTINGS</span>';
+  menu.classList.add('show', 'pregame-settings');
+  syncMenu();
+}
+function closeSettings() {
+  menu.classList.remove('show', 'pregame-settings');
+  pregame.show();
+}
+
+/** Cheap part of the session build: the physics spec, so the engine sound can be configured in the gesture. */
+function prepareSpec() {
+  const cs = carSpec(setup.car, setup.tunes[setup.car], build);
+  SPEC = cs.spec; ENGINE = cs.engine; CAR_BUILD = cs.build;
+  SEQ = SPEC.transType !== 'manual';
+  audio.configure({ cyl: SPEC.cylinders, layout: SPEC.layout, blower: SPEC.blower, turbo: SPEC.turbo, profile: SPEC.audio });
+}
+
+/** Build the track, car, effects and HUD for the chosen setup (once per page load). */
+function buildWorld() {
+  if (TRACKS[setup.track] && setup.track === 'ring') materials.terrainGroup = TERRAIN_GROUP;
+  track = new Track(scene, world, materials, settings.gfx, setup.track);
+  vehicle = new Vehicle(world, SPEC, materials);
+  car = new CarModel(vehicle, envMap);
+  scene.add(car.root, car.contact);
+  smoke = new TyreSmoke(scene, HIGH ? 700 : 360, SUN_DIR);
+  smoke.setViewportHeight(window.innerHeight * renderer.getPixelRatio());
+  skids = new SkidMarks(scene);
+  // Driver's eye and the hood cam, from the car's own measurements (ground height, metres behind the front axle)
+  const y0 = -SPEC.cgHeight - (SPEC.rideDrop || 0);
+  COCKPIT_EYE.set(SPEC.eye[0], y0 + SPEC.eye[1], vehicle.frontAxleZ + SPEC.eye[2]);
+  HOOD_EYE.set(SPEC.hood[0], y0 + SPEC.hood[1], vehicle.frontAxleZ + SPEC.hood[2]);
+  hud.setRange(SPEC.redlineRpm);
+  // Collisions → sound + haptics
+  vehicle.body.addEventListener('collide', (e) => {
+    const v = Math.abs(e.contact.getImpactVelocityAlongNormal());
+    const ground = track.isGround(e.body);
+    if (!ground) vehicle.wallHit(v);
+    if (v > 1.5 && !ground) {
+      audio.impact(v / 14);
+      haptic(Math.min(80, 15 + v * 4));
+    }
+  });
+  loadBest();
+  document.body.classList.toggle('drag', track.isDrag);
+  if (track.isDrag) {
+    $('lap-label').textContent = 'RUN';
+    $('last-label').textContent = 'LAST ET';
+    $('best-label').textContent = 'BEST ET';
+    $('prog-label').textContent = 'RUN';
+    hud.fmt = (t) => (t == null || !isFinite(t) ? '--.---' : `${t.toFixed(3)} s`);
+  }
+  $('menu-sub').textContent = TRACKS[setup.track].sub;
+  $('build-badge').textContent = `${carSummary(setup.car, ENGINE, CAR_BUILD)} · ${TRANS[CAR_BUILD.trans].name.toUpperCase()}`;
+  $('menu-title').innerHTML = `ARIEL'S <span>${CARS[setup.car].short}</span>`;
+  placeAtStart();
+  if (track.isDrag) dragReset();
+  applySettings();
+  built = true;
+  window.__game = { vehicle, state, audio, controls, track, camera, car, renderer, smoke, nos, drag, SPEC, tick, seqShift };
+}
+
+/** RACE: everything that needs the tap (audio unlock, tilt permission, fullscreen) first, then build. */
+async function race() {
+  saveSetup();
+  pregame.hide();
+  prepareSpec();
+  const loading = $('loading');
+  loading.querySelector('p').textContent = `Building ${TRACKS[setup.track].name}…`;
+  loading.classList.remove('hide');
+  const go = onGo(true);
+  // Let the loading screen paint before the (synchronous) world build
+  await new Promise(r => requestAnimationFrame(() => setTimeout(r, 30)));
+  try { buildWorld(); } catch (e) { console.error(e); loading.querySelector('p').textContent = 'Something went wrong building the track — please reload'; throw e; }
+  loading.classList.add('hide');
+  await go;
+}
+
+async function onGo(fromRace = false) {
   // Everything here must start inside the user gesture (iOS)
   const tilt = Controls.requestTiltPermission();
   const snd = audio.init();
@@ -608,6 +809,8 @@ async function onGo() {
 
   const tiltOk = await tilt;
   try { await snd; } catch (e) { console.warn('audio init failed', e); }
+  // RACE: wait for the world (built right after this gesture work was kicked off)
+  while (fromRace && !built) await new Promise(r => setTimeout(r, 30));
   applySettings();
   menu.classList.remove('show', 'show-settings');
   document.body.classList.add('playing');
@@ -627,7 +830,7 @@ async function onGo() {
       const hint = SPEC.transType === 'auto' ? 'Tap ▲ for D, then GAS'
         : SEQ ? 'Tap ▲ for 1st, then GAS'
           : settings.auto ? 'Tap 1 on the shifter, then GAS' : 'CLUTCH in → shift to 1 → ease off the clutch with GAS';
-      hud.toast(hint, 4);
+      hud.toast(track.isDrag ? `Staged at the line. ${hint} on the green (BRAKE + GAS = launch control)` : hint, 4.5);
     }, 400);
   }
 }
@@ -680,7 +883,7 @@ function seqShift(dir) {
   syncSeqLabels();
 }
 function syncSeqLabels() {
-  if (!SEQ) return;
+  if (!SEQ || !vehicle) return;
   const d = vehicle.drivetrain, g = d.gear;
   const name = (x) => (x === -1 ? 'R' : x === 0 ? 'N' : SPEC.transType === 'auto' ? 'D' : String(x));
   const up = SPEC.transType === 'auto' ? (g === -1 ? 0 : 1) : Math.min(5, g + 1);
@@ -693,31 +896,33 @@ for (const [id, dir] of [['seq-up', 1], ['seq-down', -1]]) {
 }
 setInterval(syncSeqLabels, 250);
 
-// ---------------- Garage ----------------
-$('build-badge').textContent = `${summary(ENGINE)} · ${TRANS[build.trans].name.toUpperCase()}`;
+// ---------------- Pre-game garage & the Charger's engine builder ----------------
+const pregame = new PreGame({
+  setup, custom: build,
+  onChange: () => saveSetup(),
+  onRace: () => race(),
+  onSettings: () => openSettings(),
+  onEngine: () => { pregame.hide(); garage.show(); },
+});
 const garage = new Garage({
-  baseSpec: BASE_SPEC,
+  baseSpec: CARS.charger.base,
   current: build,
   onApply: (b, changed) => {
-    if (!changed) { garage.hide(); onGo(); return; }
-    try {
-      localStorage.setItem('charger.build', JSON.stringify(b));
-      sessionStorage.setItem('charger.newBuild', '1');
-    } catch (e) { /* private mode: applies for this session only */ }
-    location.reload();   // rebuild the car, physics, HUD and sound from the new spec
+    if (changed) {
+      build = sanitize(b);
+      try { localStorage.setItem('charger.build', JSON.stringify(build)); } catch (e) { /* private mode: this session only */ }
+      pregame.setCustom(build);
+    }
+    garage.hide();
+    race();   // DRIVE: straight onto the track with the new engine
   },
+  onClose: () => pregame.show(),
 });
-$('btn-garage').addEventListener('click', () => garage.show());
-try {
-  if (sessionStorage.getItem('charger.newBuild')) {
-    sessionStorage.removeItem('charger.newBuild');
-    $('menu-sub').textContent = 'NEW BUILD READY · TURN THE KEY';
-  }
-} catch (e) { /* ignore */ }
 
 buildMenu();
 applySettings();
 $('loading').classList.add('hide');
+pregame.show();
 
 // ---------------- PWA ----------------
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
@@ -737,6 +942,7 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   });
 }
 $('build').textContent = `BUILD ${BUILD}`;
+$('pg-build').textContent = `BUILD ${BUILD}`;
 
-// Debug handle (handy from the browser console)
-window.__game = { vehicle, state, audio, controls, track, camera, car, renderer, smoke, nos };
+// Debug handle (handy from the browser console); buildWorld() replaces it with the full set
+window.__game = { state, audio, controls, camera, renderer, pregame, setup };

@@ -171,17 +171,20 @@ function chunked(group, geo, mat, items, cell, opts = {}) {
 
 export function buildTrees(track, group, rand, quality, keepClear = []) {
   const pines = [], broad = [];
-  const count = quality === 'high' ? 900 : 600;
+  // Woods around the whole circuit: density as on the classic track, capped for phones
+  const B = track.bounds, M = 260;
+  const area = (B.maxX - B.minX + 2 * M) * (B.maxZ - B.minZ + 2 * M);
+  const count = Math.round(Math.min(quality === 'high' ? 1500 : 950, (quality === 'high' ? 900 : 600) * area / 3.2e6));
   const c = new THREE.Color();
   let tries = 0;
-  while (pines.length + broad.length < count && tries++ < 30000) {
-    const x = -950 + rand() * 1800, z = -950 + rand() * 1300;
+  while (pines.length + broad.length < count && tries++ < 40000) {
+    const x = B.minX - M + rand() * (B.maxX - B.minX + 2 * M), z = B.minZ - M + rand() * (B.maxZ - B.minZ + 2 * M);
     if (!track.clearOfTrack(x, z, 26)) continue;
-    if (z > -40 && z < 75 && x > -370 && x < 430) continue; // keep the grandstand/pit area open
+    if (track.inClearZone(x, z)) continue;   // keep the grandstand/pit area open
     if (keepClear.some(b => b.clear.some(p => (p.x - x) ** 2 + (p.z - z) ** 2 < 28 * 28))) continue;   // don't hide the billboards
     const k = 0.75 + rand() * 0.7;
     const it = {
-      x, z, rot: rand() * 6.28, sx: k, sy: k * (0.85 + rand() * 0.4),
+      x, y: track.height(x, z) - 0.3, z, rot: rand() * 6.28, sx: k, sy: k * (0.85 + rand() * 0.4),
       color: c.setHSL(0.22 + rand() * 0.08, 0.25 + rand() * 0.25, 0.7 + rand() * 0.28).clone(),
     };
     // Pines in clusters toward the far side, broadleaf elsewhere
@@ -194,11 +197,12 @@ export function buildTrees(track, group, rand, quality, keepClear = []) {
 
   // Distant forest belt (cheap cones) to close the horizon
   const far = [];
-  const cx = 0, cz = -280;
-  for (let i = 0; i < (quality === 'high' ? 2600 : 1400); i++) {
-    const a = rand() * Math.PI * 2, r = 1150 + rand() * 450;
+  const cx = B.cx, cz = B.cz, R0 = Math.max(1150, B.R + 380);
+  for (let i = 0; i < (quality === 'high' ? 2600 : 1400) * Math.min(1.6, R0 / 1150); i++) {
+    const a = rand() * Math.PI * 2, r = R0 + rand() * 450;
     const k = 1.4 + rand() * 1.6;
-    far.push({ x: cx + Math.cos(a) * r, z: cz + Math.sin(a) * r, rot: rand() * 6, sx: k, sy: k * (0.8 + rand() * 0.6),
+    const x = cx + Math.cos(a) * r, z = cz + Math.sin(a) * r;
+    far.push({ x, y: track.height(x, z) - 0.5, z, rot: rand() * 6, sx: k, sy: k * (0.8 + rand() * 0.6),
       color: new THREE.Color().setHSL(0.27 + rand() * 0.06, 0.3, 0.13 + rand() * 0.07) });
   }
   const farGeo = new THREE.ConeGeometry(3, 12, 6);
@@ -213,13 +217,13 @@ export function buildGrassTufts(track, group, rand, quality) {
   for (let i = 0; i < n; i++) {
     const k = (rand() * track.N) | 0;
     const side = rand() < 0.5 ? -1 : 1;
-    const lat = 10.8 + rand() * 4.6;
+    const lat = track.half + 3.8 + rand() * 4.6;
     const p = track.points[k], r = track.rights[k], t = track.tangents[k];
     const along = (rand() - 0.5) * track.ds;
     const x = p.x + r.x * side * lat + t.x * along, z = p.z + r.z * side * lat + t.z * along;
-    if (!track.clearOfTrack(x, z, 10.6, k)) continue;
+    if (!track.clearOfTrack(x, z, track.half + 3.6, k)) continue;
     const s = 0.5 + rand() * 0.6;
-    items.push({ x, z, rot: rand() * 6.28, sx: s, sy: s * (0.7 + rand() * 0.6), color: tint.setHSL(0.22 + rand() * 0.06, 0.5, 0.72 + rand() * 0.26).clone() });
+    items.push({ x, y: track.height(x, z) - 0.05, z, rot: rand() * 6.28, sx: s, sy: s * (0.7 + rand() * 0.6), color: tint.setHSL(0.22 + rand() * 0.06, 0.5, 0.72 + rand() * 0.26).clone() });
   }
   // Three crossed quads
   const quads = [];
@@ -243,13 +247,13 @@ export function buildGrassTufts(track, group, rand, quality) {
   chunked(group, geo, mat, items, 90, { receive: true, lod: { dist: quality === 'high' ? 150 : 90 } });
 }
 
-export function buildMountains(group, rand) {
-  const cx = 0, cz = -280;
+export function buildMountains(group, rand, bounds = { cx: 0, cz: -280, R: 900 }) {
+  const cx = bounds.cx, cz = bounds.cz, grow = Math.max(0, bounds.R - 900);
   // Sky horizon colour (display space) converted to linear so the ridges fade into it exactly
   const haze = new THREE.Color().setRGB(0.74, 0.83, 0.92, THREE.SRGBColorSpace);
   const layers = [
-    { R: 2550, base: 120, amp: 520, freq: [2, 6, 13], rock: 0x56657a, high: 0x7a8798, snow: 440, haze: 0.3 },
-    { R: 1900, base: 30, amp: 170, freq: [4, 9, 21], rock: 0x2f4630, high: 0x4f6450, snow: 1e9, haze: 0.12 },
+    { R: 2550 + grow, base: 120, amp: 520, freq: [2, 6, 13], rock: 0x56657a, high: 0x7a8798, snow: 440, haze: 0.3 },
+    { R: 1900 + grow, base: 30, amp: 170, freq: [4, 9, 21], rock: 0x2f4630, high: 0x4f6450, snow: 1e9, haze: 0.12 },
   ];
   const ROWS = 7;
   for (const L of layers) {
@@ -317,44 +321,48 @@ export function buildBillboards(track, group) {
   const heartMat = new THREE.MeshPhysicalMaterial({ color: 0xd0103a, emissive: 0x700018, emissiveIntensity: 0.6, roughness: 0.25, clearcoat: 1, metalness: 0.1 });
   const hearts = [], spots = [];
   const N = track.N, K = track.curvature;
-  const maxK = (from, count) => { let m = 0; for (let j = 0; j < count; j++) m = Math.max(m, Math.abs(K[(from + j + N) % N])); return m; };
+  const maxK = (from, count) => { let m = 0; for (let j = 0; j < count; j++) m = Math.max(m, Math.abs(K[track.wrap(from + j)])); return m; };
 
   const place = (kind, x, z, eyeIndex, index) => {
-    const eye = track.points[(eyeIndex + N) % N];
+    const eye = track.points[track.wrap(eyeIndex)];
     let nx = eye.x - x, nz = eye.z - z;
     const nl = Math.hypot(nx, nz); nx /= nl; nz /= nl;
     const ax = nz, az = -nx;   // board's long axis
-    if (z > -70 && x > -400 && x < 300) return false;   // grandstands and pit building
+    if (track.inClearZone(x, z, 10)) return false;   // grandstands and pit building
     // Every part of the face and legs stays at least 19 m from the centreline (3 m behind the barriers)
     if (![-1, -0.66, -0.33, 0, 0.33, 0.66, 1].every(f => track.clearOfTrack(x + ax * f * (W / 2 + 1), z + az * f * (W / 2 + 1), 19))) return false;
+    // On hills: stand on the lowest ground under the face (legs reach down into the slope)
+    const ys = [-1, 0, 1].map(f => track.height(x + ax * f * W / 2, z + az * f * W / 2));
+    const y0 = Math.min(...ys), sink = Math.max(...ys) - y0;
     const g = new THREE.Group();
     const board = new THREE.Mesh(new THREE.BoxGeometry(W + 0.6, H + 0.6, 0.4), [frame, frame, frame, frame, mats[kind], backMat]);
-    board.position.y = POST + H / 2;
+    const lift = POST + sink;
+    board.position.y = lift + H / 2;
     board.castShadow = true; board.receiveShadow = true;
     g.add(board);
     // Four steel legs from the ground up behind the face (nothing sits below y = 0)
-    const legH = POST + H * 0.75;
+    const legH = lift + H * 0.75 + 1;
     for (const s of [-0.75, -0.25, 0.25, 0.75]) {
       const post = new THREE.Mesh(new THREE.BoxGeometry(0.9, legH, 0.9), frame);
-      post.position.set(s * W * 0.5, legH / 2, -0.75);
+      post.position.set(s * W * 0.5, legH / 2 - 1, -0.75);
       post.castShadow = true;
       g.add(post);
     }
     for (let i = -4; i <= 4; i++) {   // floodlights along the top edge
       const lamp = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.4, 0.6), frame);
-      lamp.position.set(i * W / 9, POST + H + 0.8, 0.8);
+      lamp.position.set(i * W / 9, lift + H + 0.8, 0.8);
       g.add(lamp);
     }
     if (kind === 'sarit') {
       const heart = new THREE.Mesh(heartGeo, heartMat);
       heart.scale.setScalar(HEART);
-      heart.position.set(0, POST + H + 0.6 + HEART * 0.7, 0);
+      heart.position.set(0, lift + H + 0.6 + HEART * 0.7, 0);
       heart.castShadow = true;
       g.add(heart);
       hearts.push(heart);
     }
     mergeByMaterial(g);
-    g.position.set(x, 0, z);
+    g.position.set(x, y0, z);
     g.rotation.y = Math.atan2(nx, nz);
     group.add(g);
     // Keep trees out of the board and its sightline back to the track
@@ -369,12 +377,14 @@ export function buildBillboards(track, group) {
   for (let i = 0; i < N; i++) {
     if (Math.abs(K[i]) > 1 / 160 && Math.abs(K[(i - 1 + N) % N]) <= 1 / 160 && maxK(i, 80) > 1 / 50) slow.push(i);
   }
+  // Drag strip: its braking zone is the shutdown area past the finish line
+  if (track.isDrag) slow.push(track.wrap(track.finishIndex + 45));
 
   // 1) Neon Sentra boards: in the braking zone, beyond the outside of the slow corner, facing the approach
   for (const e of slow) {
-    const kA = (e - 25 + N) % N;
+    const kA = track.wrap(e - 25);
     const t = track.tangents[kA], r = track.rights[kA], p = track.points[e];
-    const outward = K[(e + 10) % N] > 0 ? -1 : 1;
+    const outward = K[track.wrap(e + 10)] > 0 ? -1 : 1;
     let done = false;
     for (const side of [outward, -outward]) {
       for (const L of [34, 42, 50]) {
@@ -390,7 +400,7 @@ export function buildBillboards(track, group) {
   }
 
   // 2) Sarit boards: beside fast sections (radius > 90 m), never in a braking zone
-  const inBrakingZone = (k) => slow.some(e => { const d = (e - k + N) % N; return d < 110; });
+  const inBrakingZone = (k) => slow.some(e => { const d = track.closed ? (e - k + N) % N : e - k; return d >= 0 && d < 110; });
   for (let k = 0; k < N; k += 8) {
     if (maxK(k - 40, 80) > 1 / 90 || inBrakingZone(k)) continue;
     const p = track.points[k], r = track.rights[k];

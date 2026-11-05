@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <title>Ariel's '79 Charger</title>
-  <meta name="description" content="700 HP 1979 Dodge Charger — physics driving game with manual 5-speed, tilt steering and a synthesised Hemi V8.">
+  <meta name="description" content="Physics driving game: a 700 HP 1979 Dodge Charger, an 800 HP GT-R and a 2023 Sentra on three tracks, with a tuning garage, tilt steering and synthesised engines.">
   <meta name="theme-color" content="#0b0b0d">
   <link rel="manifest" href="manifest.json">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
@@ -22,12 +22,12 @@
   <!-- ===== HUD ===== -->
   <div id="hud">
     <div id="laps">
-      <div class="row big"><span>LAP <b id="lap-no">0</b></span><span id="lap-time">--:--.---</span></div>
-      <div class="row"><span>LAST</span><span id="lap-last">--:--.---</span></div>
-      <div class="row"><span>BEST</span><span id="lap-best">--:--.---</span></div>
+      <div class="row big"><span><i id="lap-label">LAP</i> <b id="lap-no">0</b></span><span id="lap-time">--:--.---</span></div>
+      <div class="row"><span id="last-label">LAST</span><span id="lap-last">--:--.---</span></div>
+      <div class="row"><span id="best-label">BEST</span><span id="lap-best">--:--.---</span></div>
       <div id="progress" aria-label="Lap progress">
         <div class="prog-track"><i id="prog-fill"></i><em id="prog-car"></em></div>
-        <div class="row"><span><b id="prog-pct">0%</b> LAP</span><span id="prog-left">-- TO GO</span></div>
+        <div class="row"><span><b id="prog-pct">0%</b> <i id="prog-label">LAP</i></span><span id="prog-left">-- TO GO</span></div>
       </div>
     </div>
 
@@ -48,6 +48,8 @@
     </div>
 
     <button id="btn-start" aria-label="Start engine"><span>START</span><small>ENGINE</small></button>
+    <div id="dragtree" aria-label="Christmas tree"><i class="st"></i><i class="am"></i><i class="am"></i><i class="am"></i><i class="gr"></i><i class="rd"></i></div>
+    <div id="drag-result" role="status" aria-live="polite"></div>
     <div id="toast"></div>
     <div id="lap-banner" role="status" aria-live="polite">
       <div class="lb-heart">❤</div>
@@ -86,7 +88,7 @@
   </div>
 
   <!-- ===== Menu ===== -->
-  <div id="menu" class="show">
+  <div id="menu">
     <div class="panel">
       <div id="pause-msg" class="paused-block">
         <p><span class="pm-title">Game Paused.</span> Excellent time to study for the Bar Exam, or at least go hug your wife, Sarit. <span class="pm-heart">❤</span></p>
@@ -94,7 +96,7 @@
 
       <header>
         <div class="badge" id="build-badge">700 HP · HEMI V8 · 5-SPEED · RWD</div>
-        <h1>ARIEL'S <span>'79 CHARGER</span></h1>
+        <h1 id="menu-title">ARIEL'S <span>'79 CHARGER</span></h1>
         <p id="menu-sub">ARIEL RACEWAY · 3.6 KM</p>
         <p id="build"></p>
       </header>
@@ -117,8 +119,8 @@
           <div class="seg" id="set-auto"><button data-v="0">Manual pedal</button><button data-v="1">Auto-clutch</button></div>
         </div>
         <div class="setting">
-          <label>Traction control</label>
-          <div class="seg" id="set-tcs"><button data-v="0">Off (raw 700 hp)</button><button data-v="1">On</button></div>
+          <label>Traction control <small id="tcs-note"></small></label>
+          <div class="seg" id="set-tcs"><button data-v="0">Off</button><button data-v="1">On</button></div>
         </div>
         <div class="setting">
           <label>Units</label>
@@ -136,7 +138,7 @@
 
       <div class="actions">
         <button id="btn-go" class="primary">TURN THE KEY</button>
-        <button id="btn-garage" class="ghost garage-btn">🔧 GARAGE &amp; DYNO</button>
+        <button id="btn-garage" class="ghost paused-only">🏁 GARAGE · CAR &amp; TRACK</button>
         <button id="btn-restart" class="ghost paused-only">RESTART RACE</button>
         <button id="btn-settings" class="ghost paused-only">SETTINGS</button>
         <button id="btn-calibrate" class="ghost paused-only">CENTER TILT</button>
@@ -151,12 +153,33 @@
           <li>Pedals are analog: touch near the top to feather, lower for full.</li>
           <li>700 hp through skinny '70s tyres — be gentle with the throttle out of corners or the rear will step out.</li>
           <li>Stalled? Clutch in (or neutral) and tap <b>START</b>.</li>
+          <li><b>Drag strip:</b> stop with the front wheels just behind the white line in gear — the tree counts down (amber, amber, amber, GREEN). Leave early and it's a red light.</li>
           <li><b>Launch control:</b> in 1st at a standstill, hold <b>BRAKE + GAS</b> (revs lock at 3,500), then let go of the brake.</li>
           <li><b>E-BRAKE:</b> hold to lock the rear wheels and swing the tail into a hairpin; let go and feed in the gas.</li>
           <li><b>NOS:</b> tap to arm, then floor the GAS — it sprays while you're at full throttle and refills over time.</li>
           <li>Keyboard: W/S/A/D or arrows · Space = clutch · 1-5, R, N · I = ignition · C = camera · X = NOS · H = hand brake · T = reset · Esc = menu.</li>
         </ul>
       </details>
+    </div>
+  </div>
+
+  <!-- ===== Pre-game garage: track, car, tunes ===== -->
+  <div id="pregame" aria-label="Garage: choose track, car and tuning">
+    <header class="pg-top">
+      <div class="pg-title"><h2>ARIEL'S <span>GARAGE</span></h2><small id="pg-build"></small></div>
+      <button id="pg-settings" class="ghost">⚙ SETTINGS</button>
+      <button id="pg-race" class="primary">RACE ▶</button>
+    </header>
+    <div class="pg-body">
+      <div class="g-col">
+        <section class="g-card"><h3>TRACK</h3><div class="pg-cards" id="pg-tracks"></div><p class="pg-blurb" id="pg-track-blurb"></p></section>
+        <section class="g-card"><h3>CAR</h3><div class="pg-cards" id="pg-cars"></div><p class="pg-blurb" id="pg-car-blurb"></p></section>
+      </div>
+      <div class="g-col">
+        <section class="g-card"><h3>TUNING <small id="pg-tune-car"></small></h3><div id="pg-tunes"></div></section>
+        <section class="g-card"><h3>PERFORMANCE <small>white tick = stock</small></h3><div id="pg-bars"></div><div class="g-info" id="pg-stats"></div>
+          <button id="pg-engine" class="ghost">🔧 ENGINE BUILDER &amp; DYNO</button></section>
+      </div>
     </div>
   </div>
 
@@ -188,7 +211,7 @@
 
   <div id="speedfx"></div>
   <div id="rotate"><div>↻</div><p>Turn your phone sideways</p></div>
-  <div id="loading"><div class="spin"></div><p>Warming up the Hemi…</p></div>
+  <div id="loading"><div class="spin"></div><p>Opening the garage…</p></div>
 
   <script type="module" src="js/main.js"></script>
 </body>

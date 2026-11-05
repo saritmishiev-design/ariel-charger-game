@@ -160,22 +160,22 @@ export class SkidMarks {
   }
 
   /** Feed the contact point of wheel i; strength 0 breaks the trail. */
-  add(i, x, z, rx, rz, width, strength) {
+  add(i, x, z, rx, rz, width, strength, y = 0) {
     if (strength <= 0.05) { this.last[i] = null; return; }
     const prev = this.last[i];
-    const cur = { x, z, rx, rz, a: Math.min(0.55, strength * 0.6) };
+    const cur = { x, y: y + 0.035, z, rx, rz, a: Math.min(0.55, strength * 0.6) };
     if (prev) {
       const d = Math.hypot(x - prev.x, z - prev.z);
       if (d < 0.25) return;
       if (d < 3) {
         const s = this.next;
         this.next = (this.next + 1) % this.max;
-        const hw = width / 2, y = 0.035;
+        const hw = width / 2, y0 = prev.y, y1 = cur.y;
         const P = this.pos, o = s * 12;
-        P[o] = prev.x - prev.rx * hw; P[o + 1] = y; P[o + 2] = prev.z - prev.rz * hw;
-        P[o + 3] = prev.x + prev.rx * hw; P[o + 4] = y; P[o + 5] = prev.z + prev.rz * hw;
-        P[o + 6] = x - rx * hw; P[o + 7] = y; P[o + 8] = z - rz * hw;
-        P[o + 9] = x + rx * hw; P[o + 10] = y; P[o + 11] = z + rz * hw;
+        P[o] = prev.x - prev.rx * hw; P[o + 1] = y0; P[o + 2] = prev.z - prev.rz * hw;
+        P[o + 3] = prev.x + prev.rx * hw; P[o + 4] = y0; P[o + 5] = prev.z + prev.rz * hw;
+        P[o + 6] = x - rx * hw; P[o + 7] = y1; P[o + 8] = z - rz * hw;
+        P[o + 9] = x + rx * hw; P[o + 10] = y1; P[o + 11] = z + rz * hw;
         this.alpha.set([prev.a, prev.a, cur.a, cur.a], s * 4);
         this.geo.attributes.position.needsUpdate = true;
         this.geo.attributes.alpha.needsUpdate = true;

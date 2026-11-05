@@ -11,7 +11,7 @@ const HP = 745.7;   // W per mechanical hp
 export const STOCK = Object.freeze({
   bore: 108, stroke: 95.3, cr: 9.0, cyl: 8, layout: 'V',
   induction: 'sc', boost: 8,
-  trans: 'manual', gears: [2.95, 1.94, 1.34, 1.0, 0.8], final: 3.23,
+  trans: 'manual', gears: [2.95, 1.94, 1.34, 1.0, 0.8], final: 3.55,
   tireFront: 225, tireRear: 275, tireDia: 27.0,
 });
 
@@ -24,7 +24,7 @@ export const CYLINDERS = [4, 6, 8, 10, 12];
 export const LAYOUTS = { V: 'V-engine', B: 'Boxer', I: 'Inline' };
 export const INDUCTION = { na: 'Naturally aspirated', turbo: 'Turbocharged', sc: 'Supercharged', twin: 'Twincharged' };
 export const TRANS = {
-  manual: { name: 'Manual', shiftTime: 0.25, gears: [2.95, 1.94, 1.34, 1.0, 0.8], final: 3.23 },
+  manual: { name: 'Manual', shiftTime: 0.25, gears: [2.95, 1.94, 1.34, 1.0, 0.8], final: 3.55 },
   auto: { name: 'Automatic', shiftTime: 0.35, gears: [2.74, 1.54, 1.0, 0.8, 0.68], final: 3.23 },
   dct: { name: 'Sequential DCT', shiftTime: 0.08, gears: [3.1, 2.1, 1.55, 1.2, 0.95], final: 3.55 },
   drag: { name: 'Drag race', shiftTime: 0.04, gears: [2.6, 1.8, 1.35, 1.1, 1.0], final: 4.1 },
@@ -38,17 +38,17 @@ export function layoutAllows(layout, cyl) {
 }
 
 /** Clamp every field into range and repair impossible combinations. */
-export function sanitize(b) {
-  const o = { ...STOCK, ...(b || {}) };
+export function sanitize(b, stock = STOCK) {
+  const o = { ...stock, ...(b || {}) };
   for (const k of ['bore', 'stroke', 'cr', 'boost', 'final', 'tireFront', 'tireRear', 'tireDia']) {
     const [lo, hi] = LIMITS[k];
-    o[k] = clamp(Number.isFinite(+o[k]) ? +o[k] : STOCK[k], lo, hi);
+    o[k] = clamp(Number.isFinite(+o[k]) ? +o[k] : stock[k], lo, hi);
   }
-  if (!CYLINDERS.includes(+o.cyl)) o.cyl = STOCK.cyl; else o.cyl = +o.cyl;
-  if (!LAYOUTS[o.layout]) o.layout = STOCK.layout;
+  if (!CYLINDERS.includes(+o.cyl)) o.cyl = stock.cyl; else o.cyl = +o.cyl;
+  if (!LAYOUTS[o.layout]) o.layout = stock.layout;
   if (!layoutAllows(o.layout, o.cyl)) o.layout = 'V';
-  if (!INDUCTION[o.induction]) o.induction = STOCK.induction;
-  if (!TRANS[o.trans]) o.trans = STOCK.trans;
+  if (!INDUCTION[o.induction]) o.induction = stock.induction;
+  if (!TRANS[o.trans]) o.trans = stock.trans;
   const g = Array.isArray(o.gears) && o.gears.length === 5 ? o.gears : TRANS[o.trans].gears;
   o.gears = g.map((x, i) => clamp(Number.isFinite(+x) ? +x : TRANS[o.trans].gears[i], LIMITS.gear[0], LIMITS.gear[1]));
   return o;
@@ -65,12 +65,12 @@ export function sanitize(b) {
 // Redline comes from mean piston speed (stroke) and valvetrain mass (bore).
 const BMEP_NA = 12.35e5;        // Pa, a healthy street/strip NA engine
 const PISTON_SPEED = 20.6;      // m/s mean piston speed at redline
-const KNOCK_CR = 15.5;         // effective CR an intercooled engine tolerates on pump fuel
+const KNOCK_CR = 15.5;         // effective CR an intercooled engine tolerates on pump fuel (E85 tunes set knockCR)
 
 function otto(cr) { return 1 - Math.pow(cr, -0.3); }
 
-export function engineModel(input) {
-  const b = sanitize(input);
+export function engineModel(input, stock = STOCK) {
+  const b = sanitize(input, stock);
   const boreM = b.bore / 1000, strokeM = b.stroke / 1000;
   const disp = b.cyl * Math.PI / 4 * boreM * boreM * strokeM;          // m³
   const dispL = disp * 1000;
@@ -117,8 +117,10 @@ export function engineModel(input) {
     const bst = boostAt(x);
     const prx = 1 + bst;
     const crEff = b.cr * Math.pow(prx, 1 / 1.3);
-    const knock = crEff > KNOCK_CR ? Math.max(0.55, 1 - 0.07 * (crEff - KNOCK_CR)) : 1;
-    const t = BMEP_NA * disp / (4 * Math.PI) * eta * sizeK * fricK * ve(x) * Math.pow(prx, 0.85) * (1 - lossAt(x, bst)) * knock;
+    const kcr = b.knockCR || KNOCK_CR;
+    const knock = crEff > kcr ? Math.max(0.55, 1 - 0.07 * (crEff - kcr)) : 1;
+    // tq: per-car calibration (cam, head and ECU quality the bore/stroke model can't see)
+    const t = BMEP_NA * disp / (4 * Math.PI) * eta * sizeK * fricK * ve(x) * Math.pow(prx, 0.85) * (1 - lossAt(x, bst)) * knock * (b.tq || 1);
     return { t: Math.max(0, t), pr: prx, knock };
   };
   // Tabulate (the drivetrain interpolates this table)
@@ -153,18 +155,19 @@ export function engineModel(input) {
   };
 }
 
-/** Physics spec for a build, derived from the base (stock car) spec. */
-export function deriveSpec(base, input) {
-  const b = sanitize(input);
-  const e = engineModel(b);
-  const stockEngine = engineModel(STOCK);
+/** Physics spec for a build, derived from the base spec of the car it goes in (stock = that car's factory build). */
+export function deriveSpec(base, input, stock = STOCK) {
+  const b = sanitize(input, stock);
+  const e = engineModel(b, stock);
+  const stockEngine = engineModel(stock, stock);
   // Mass and weight distribution: the engine sits ~90 % over the front axle
   const mass = base.mass - stockEngine.mass + e.mass;
   const frontKg = base.mass * base.frontWeight - stockEngine.mass * 0.9 + e.mass * 0.9;
   const r = b.tireDia * 0.0254 / 2;
   const t = TRANS[b.trans];
-  const gripF = Math.pow(b.tireFront / STOCK.tireFront, 0.22);
-  const gripR = Math.pow(b.tireRear / STOCK.tireRear, 0.22);
+  const gripF = Math.pow(b.tireFront / stock.tireFront, 0.22);
+  const gripR = Math.pow(b.tireRear / stock.tireRear, 0.22);
+  const r0 = stock.tireDia * 0.0254 / 2;
   return {
     mass,
     frontWeight: clamp(frontKg / mass, 0.45, 0.66),
@@ -172,11 +175,11 @@ export function deriveSpec(base, input) {
     wheelRadius: r,
     tyreWidthFront: b.tireFront / 1000,
     tyreWidthRear: b.tireRear / 1000,
-    tyreMu: base.tyreMu * gripR,                          // drive traction (rear tyres)
+    tyreMu: base.tyreMu * (base.drive === 'FWD' ? gripF : gripR),   // drive traction (driven tyres)
     frictionSlipFront: base.frictionSlipFront * gripF,    // cornering grip per axle
     frictionSlipRear: base.frictionSlipRear * gripR,
-    rollingResistance: base.rollingResistance * Math.sqrt((b.tireFront + b.tireRear) / (STOCK.tireFront + STOCK.tireRear)),
-    rearAxleInertia: base.rearAxleInertia * Math.pow(r / 0.343, 2) * (b.tireRear / STOCK.tireRear),
+    rollingResistance: base.rollingResistance * Math.sqrt((b.tireFront + b.tireRear) / (stock.tireFront + stock.tireRear)),
+    rearAxleInertia: base.rearAxleInertia * Math.pow(r / r0, 2) * (b.tireRear / stock.tireRear),
     idleRpm: e.idleRpm, redlineRpm: e.redline, limiterRpm: e.limiter,
     engineInertia: e.inertia, frictionScale: e.frictionScale,
     torqueCurve: e.curve, boostCurve: e.turbo ? e.boostCurve : null,
@@ -211,13 +214,20 @@ export function dragRun(spec, maxTime = 60) {
   d.autoClutch = s.transType !== 'manual';
   d.running = true;
   d.engineW = s.idleRpm * Math.PI / 30;
-  const L = 2.921;
+  const L = s.wheelbase || 2.921;
+  // Load on the driven tyres: weight transfer to the rear helps RWD, hurts FWD, AWD uses all four
+  const driveLoad = (acc) => {
+    const st = s.mass * g, dT = s.mass * acc * s.cgHeight / L;
+    if (s.drive === 'AWD') return st;
+    if (s.drive === 'FWD') return Math.max(0, st * s.frontWeight - dT);
+    return Math.max(0, st * (1 - s.frontWeight) + dT);
+  };
   let v = 0, x = 0, t = 0, a = 0, t100 = null, t200 = null, quarter = null, top = 0, shiftAt = -1, stillTop = 0;
   d.gear = 1;
   if (s.transType === 'auto') d.autoDrive = true;
   // Arm launch control for 1 s
   d.brakeInput = 1; d.throttleInput = 1; d.clutchPedal = 0;
-  for (let i = 0; i < 120; i++) { const N = s.mass * g * (1 - s.frontWeight); d.step(dt, 0, N, s.tyreMu); }
+  for (let i = 0; i < 120; i++) d.step(dt, 0, driveLoad(0), s.tyreMu);
   d.brakeInput = 0;
   const trace = [];
   while (t < maxTime) {
@@ -232,8 +242,7 @@ export function dragRun(spec, maxTime = 60) {
       if (t - shiftAt > s.shiftTime * 0.5 && d.clutchPedal === 1 && d.gear < 5 && d.throttleInput === 0) { d.requestGear(d.gear + 1, v); d.throttleInput = 0.0001; }
       if (t - shiftAt > s.shiftTime) { d.clutchPedal = Math.max(0, 1 - (t - shiftAt - s.shiftTime) / 0.12); d.throttleInput = 1; if (d.clutchPedal === 0) shiftAt = -1; }
     } else if (shiftAt >= 0 && t - shiftAt > s.shiftTime + 0.05) shiftAt = -1;
-    const N = Math.max(0, s.mass * g * (1 - s.frontWeight) + s.mass * a * s.cgHeight / L);
-    const F = d.step(dt, v, N, s.tyreMu);
+    const F = d.step(dt, v, driveLoad(a), s.tyreMu);
     const drag = 0.5 * 1.225 * s.dragCoefficient * s.frontalArea * v * v;
     const roll = s.rollingResistance * s.mass * g * (v > 0.1 ? 1 : 0);
     a = (F - drag - roll) / s.mass;

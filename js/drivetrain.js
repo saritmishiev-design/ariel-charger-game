@@ -1,4 +1,4 @@
-// Engine + clutch + 5-speed gearbox + rear axle with tyre slip.
+// Engine + clutch + 5-speed gearbox + driven axle with tyre slip (rear, front or both for AWD).
 // Pure math (no rendering) so it can be unit-tested in Node.
 
 const RAD2RPM = 60 / (2 * Math.PI);
@@ -252,7 +252,7 @@ export class Drivetrain {
       this.boostPsi = (this.boostPR(this.rpm) - 1) * this.spool * 14.7;
     }
 
-    const lowGearWot = this.running && this.gear > 0 && this.gear <= 2 && this.throttleInput > 0.85 && !launching;
+    const lowGearWot = s.powerSlide !== false && this.running && this.gear > 0 && this.gear <= 2 && this.throttleInput > 0.85 && !launching;
     const nearLimiter = this.rpm > s.limiterRpm - 900;
     const slideTarget = lowGearWot ? (nearLimiter ? 1 : 0.6) : 0;
     this.powerSlide += (slideTarget - this.powerSlide) * Math.min(1, dt * (slideTarget > this.powerSlide ? 5 : 2.5));
@@ -288,7 +288,10 @@ export class Drivetrain {
     this.clutchEngage = engage;
     const Tcap = s.clutchMaxTorque * Math.pow(engage, 1.4);
     const G = this.ratio();
-    const brakeT = this.brakeInput * s.maxBrakeForce * (1 - s.brakeBiasFront) * r + this.handbrake * s.handbrakeTorque;
+    // Service brakes on the driven axle (the vehicle brakes the other one); the hand brake works on
+    // this axle only when it is the rear one (RWD) — on AWD it just opens the clutch
+    const brakeShare = s.drive === 'AWD' ? 1 : s.drive === 'FWD' ? s.brakeBiasFront : 1 - s.brakeBiasFront;
+    const brakeT = this.brakeInput * s.maxBrakeForce * brakeShare * r + this.handbrake * s.handbrakeTorque * (s.drive && s.drive !== 'RWD' ? 0 : 1);
 
     // The torque kick breaks the rears loose; once they're spinning, full grip returns so the
     // spinning tyres still drive the car forward through the slide

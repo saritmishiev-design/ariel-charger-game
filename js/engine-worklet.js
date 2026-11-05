@@ -24,6 +24,14 @@ function bankPattern(cyl, layout) {
   return Array.from({ length: cyl }, (_, i) => i % 2);
 }
 
+// Voice per car: the blown Hemi (big-cam lope, open pipes), the GT-R's VR38 V6 (turbines muffle
+// and smooth it: tighter, raspier, higher), the Sentra's MR20 (quiet economy muffler, buzzy four)
+const PROFILES = {
+  hemi: { lope: 1, f1: [150, 0.02], f2: [380, 0.034], g1: 1.5, g2: 0.35, fc: [300, 2300, 0.26, 6000], pipes: [66, 103], comb: [330, 410], crackle: 0.07, spread: 0.56, gain: 1, body: 1 },
+  vr38: { lope: 0, f1: [230, 0.03], f2: [640, 0.06], g1: 1.1, g2: 0.6, fc: [450, 2500, 0.34, 4600], pipes: [95, 148], comb: [520, 650], crackle: 0.035, spread: 0.18, gain: 0.95, body: 0.7 },
+  mr20: { lope: 0, f1: [300, 0.03], f2: [820, 0.05], g1: 0.8, g2: 0.3, fc: [240, 900, 0.12, 2200], pipes: [120, 172], comb: [600, 720], crackle: 0, spread: 0.12, gain: 0.5, body: 0.5 },
+};
+
 class V8Processor extends AudioWorkletProcessor {
   static get parameterDescriptors() {
     return [
@@ -50,7 +58,9 @@ class V8Processor extends AudioWorkletProcessor {
     this.far = new Float32Array(1024);
     this.farPos = 0;
     // Per-cylinder personality: slightly different breathing & timing.
-    this.cylGain = Array.from({ length: 12 }, () => 0.72 + this.rand() * 0.56);
+    this.cylBase = Array.from({ length: 12 }, () => 0.72 + this.rand() * 0.56);
+    this.cylGain = this.cylBase.slice();
+    this.P = PROFILES.hemi;
     this.cylTiming = Array.from({ length: 12 }, () => (this.rand() - 0.5) * 0.1);
     this.port.onmessage = (e) => this.configure(e.data);
     this.fireCount = 0;
@@ -84,10 +94,14 @@ class V8Processor extends AudioWorkletProcessor {
     this.rpmS = 0; this.loadS = 0; this.popEnv = 0;
   }
 
-  /** Engine layout from the garage: { cyl, layout }. */
-  configure({ cyl, layout }) {
+  /** Engine layout from the garage: { cyl, layout, profile }. */
+  configure({ cyl, layout, profile }) {
     this.cyl = cyl || 8;
     this.layout = layout || 'V';
+    const P = this.P = PROFILES[profile] || PROFILES.hemi;
+    this.dlLen = [Math.round(this.sr / (2 * P.pipes[0])), Math.round(this.sr / (2 * P.pipes[1]))];
+    this.hlLen = [Math.round(this.sr / P.comb[0]), Math.round(this.sr / P.comb[1])];
+    this.cylGain = this.cylGain.map((g, i) => 1 + (this.cylBase[i] - 1) * P.spread / 0.56);
     this.bank = bankPattern(this.cyl, this.layout);
     // An inline engine's single manifold splits to both tailpipes: no far-bank thinning
     this.bankGain = this.layout === 'I' ? [1.0, 0.0] : this.layout === 'B' ? [1.0, 0.75] : [1.0, 0.55];
@@ -104,7 +118,7 @@ class V8Processor extends AudioWorkletProcessor {
 
   fire(cyl, rpm, load, cut) {
     const b = this.bank[cyl];
-    const lope = Math.max(0, 1 - (rpm - 900) / 1800);          // big-cam idle lope
+    const lope = Math.max(0, 1 - (rpm - 900) / 1800) * this.P.lope;   // big-cam idle lope
     let amp = this.cylGain[cyl] * (1 + (this.rand() - 0.5) * (0.12 + 0.55 * lope));
     let noise = 0.25 + load * 0.9;
     let level = 0.42 + 0.58 * Math.pow(load, 0.75);
@@ -117,7 +131,7 @@ class V8Processor extends AudioWorkletProcessor {
       else level = 0.05;
     } else if (overrun) {
       level = 0.13;
-      if (this.rand() < 0.07) {                                    // overrun crackle
+      if (this.rand() < this.P.crackle) {                          // overrun crackle
         level = 0.9 + this.rand() * 1.1; noise = 2.8; this.popEnv = 1;
       }
     }
@@ -149,7 +163,8 @@ class V8Processor extends AudioWorkletProcessor {
     const tauN = tauA0 * (0.45 + this.popEnv * 2.5);
     const dn = Math.exp(-1 / (tauN * sr));
     // Muffler: resonant 2-pole low-pass opening with load + rpm (darker than a race pipe)
-    const fc = Math.min(6000, 300 + 2300 * Math.pow(loadT, 0.8) + rpmT * 0.26 + this.popEnv * 2500);
+    const PF = this.P;
+    const fc = Math.min(PF.fc[3], PF.fc[0] + PF.fc[1] * Math.pow(loadT, 0.8) + rpmT * PF.fc[2] + this.popEnv * 2500);
     const g = 1 - Math.exp(-6.283185307 * fc / sr);
     const fb = 0.22;
     // Throat formants: the chesty "ohh" of big-bore pipes, rising a little with revs
@@ -157,14 +172,14 @@ class V8Processor extends AudioWorkletProcessor {
       const w = 6.283185307 * f / sr, al = Math.sin(w) / (2 * q), a0 = 1 + al;
       return [al / a0, -al / a0, -2 * Math.cos(w) / a0, (1 - al) / a0];   // b0, b2, a1, a2 (b1 = 0)
     };
-    const F1 = bp(150 + rpmT * 0.02, 1.5), F2 = bp(380 + rpmT * 0.034, 2.4);
-    const g1 = 1.5 + loadT * 0.9, g2 = 0.35 + loadT * 0.35;
+    const F1 = bp(PF.f1[0] + rpmT * PF.f1[1], 1.5), F2 = bp(PF.f2[0] + rpmT * PF.f2[1], 2.4);
+    const g1 = PF.g1 + loadT * 0.9, g2 = PF.g2 + loadT * 0.35;
     // Moderate drive: hard clipping would flatten every pulse to the same height and erase
     // the bank-to-bank differences that carry the cross-plane lope
     const drive = 1.0 + loadT * 1.1 + this.popEnv;
-    const lopeBlk = Math.max(0, 1 - (rpmT - 900) / 1800);
+    const lopeBlk = Math.max(0, 1 - (rpmT - 900) / 1800) * PF.lope;
     // A big-cam Hemi idles loud: lift the low-rpm level so the lope is heard over the road
-    const norm = outGain * 0.5 * (1 + 0.9 * lopeBlk) / Math.tanh(drive);
+    const norm = outGain * 0.5 * PF.gain * (1 + 0.9 * lopeBlk) / Math.tanh(drive);
 
     for (let i = 0; i < n; i++) {
       const f = (i + 1) / n;
@@ -221,7 +236,7 @@ class V8Processor extends AudioWorkletProcessor {
       // Fundamental "body" at firing frequency — weight on bigger speakers
       this.bodyPhase += rpm * fps / sr;
       if (this.bodyPhase > 1) this.bodyPhase -= 1;
-      const body = running ? Math.sin(this.bodyPhase * 6.283185307) * (0.03 + load * 0.05) * Math.min(1, rpm / 600) : 0;
+      const body = running ? Math.sin(this.bodyPhase * 6.283185307) * (0.03 + load * 0.05) * PF.body * Math.min(1, rpm / 600) : 0;
 
       for (let c = 0; c < 2; c++) {
         const inp = (c === 0 ? chL : chR) - this.m2[c] * fb;

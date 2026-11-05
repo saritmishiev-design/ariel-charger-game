@@ -23,7 +23,7 @@ export class AudioEngine {
     this.lastImpact = 0;
     this.lastImpactS = 0;
     this.watch = { ctxT: 0, wall: 0, stuck: false };
-    this.engineCfg = { cyl: 8, layout: 'V', blower: true, turbo: false };
+    this.engineCfg = { cyl: 8, layout: 'V', blower: true, turbo: false, profile: 'hemi' };
   }
 
   /** Engine build from the garage (cylinders, layout, induction hardware). */
@@ -33,7 +33,7 @@ export class AudioEngine {
   }
 
   sendEngineCfg() {
-    const c = { cyl: this.engineCfg.cyl, layout: this.engineCfg.layout };
+    const c = { cyl: this.engineCfg.cyl, layout: this.engineCfg.layout, profile: this.engineCfg.profile };
     if (this.engine && this.engine.port) this.engine.port.postMessage(c);
     else if (this.fallbackProc) this.fallbackProc.configure(c);
   }
@@ -84,7 +84,8 @@ export class AudioEngine {
 
     // ---- Engine bus: tone shaping for that chest-thumping Hemi
     this.engineBus = ctx.createGain();
-    this.engineBus.gain.value = 1.0;
+    // The Sentra's economy muffler: the whole engine voice sits far lower in the mix
+    this.engineBus.gain.value = this.engineCfg.profile === 'mr20' ? 0.42 : 1.0;
     // Low shelf for real speakers/headphones, then a "throat" lift in the 150–350 Hz band
     // that phone speakers can actually reproduce, and a softened top end (rumble, not rasp)
     const lowShelf = ctx.createBiquadFilter();
@@ -298,7 +299,8 @@ export class AudioEngine {
     const crankHz = rpm / 60;
     const thr = s.throttle;
     this.ramp(this.intakeF.frequency, 250 + rpm * 0.16, tc);
-    this.ramp(this.intakeG.gain, s.running ? (0.015 + thr * 0.12) * clamp(rpm / 6000, 0.2, 1.2) : 0, 0.04);
+    const intakeK = this.engineCfg.profile === 'mr20' ? 0.4 : this.engineCfg.profile === 'vr38' ? 0.8 : 1;
+    this.ramp(this.intakeG.gain, s.running ? (0.015 + thr * 0.12) * intakeK * clamp(rpm / 6000, 0.2, 1.2) : 0, 0.04);
 
     const blowerHz = crankHz * 1.15 * 6;
     this.ramp(this.whine.frequency, Math.max(20, blowerHz), tc);
@@ -311,9 +313,10 @@ export class AudioEngine {
     const spool = this.engineCfg.turbo && s.running ? clamp(s.spool || 0, 0, 1) : 0;
     const bst = clamp((s.boostPsi || 0) / 20, 0, 1.5);
     this.ramp(this.turboOsc.frequency, 1800 + 7000 * spool * (0.4 + 0.6 * Math.min(1, bst)), 0.05);
-    this.ramp(this.turboOscG.gain, spool * spool * 0.02 * (0.5 + bst), 0.05);
+    const twinK = this.engineCfg.profile === 'vr38' ? 1.6 : 1;   // two IHI turbines, right by your feet
+    this.ramp(this.turboOscG.gain, spool * spool * 0.02 * twinK * (0.5 + bst), 0.05);
     this.ramp(this.turboNF.frequency, 900 + 2600 * spool, 0.05);
-    this.ramp(this.turboNG.gain, spool * 0.07 * (0.4 + bst), 0.05);
+    this.ramp(this.turboNG.gain, spool * 0.07 * twinK * (0.4 + bst), 0.05);
 
     // Tyres (silent on grass, where the rumble layer takes over)
     const onGrass = s.offroad ? 1 : 0;
@@ -373,11 +376,35 @@ export class AudioEngine {
     return { f, g, src };
   }
 
-  blowOff() {
+  blowOff(boost = 1) {
     if (!this.ready) return;
-    // pssh-tututu: a sharp vent then a fluttering tail
+    // pssh: a sharp vent and a short hiss
     this.burst(0.4, { type: 'highpass', freq: 1500, q: 0.7, gain: 0.35, attack: 0.005 });
     this.burst(0.25, { type: 'bandpass', freq: 3800, q: 2, gain: 0.18, attack: 0.003, rate: 0.6 });
+    if (this.engineCfg.profile === 'vr38') this.flutter(clamp(boost, 0.4, 1.4));
+  }
+
+  /** Compressor surge "stu-tu-tu-tu": air chopping back through the turbines on a big lift. */
+  flutter(k) {
+    const ctx = this.ctx, t = ctx.currentTime, dur = 0.55 + 0.25 * k;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseBuf; src.playbackRate.value = 0.8;
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 1.6;
+    f.frequency.setValueAtTime(2600, t); f.frequency.exponentialRampToValueAtTime(1100, t + dur);
+    const chop = ctx.createGain(); chop.gain.value = 0.5;
+    // Square LFO slowing from ~26 to ~11 Hz chops the noise into the flutter
+    const lfo = ctx.createOscillator(); lfo.type = 'square';
+    lfo.frequency.setValueAtTime(26, t); lfo.frequency.linearRampToValueAtTime(11, t + dur);
+    const depth = ctx.createGain(); depth.gain.value = 0.5;
+    lfo.connect(depth).connect(chop.gain);
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.0001, t);
+    env.gain.exponentialRampToValueAtTime(0.42 * k, t + 0.04);
+    env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f).connect(chop).connect(env).connect(this.master);
+    src.start(t + 0.03, Math.random()); lfo.start(t + 0.03);
+    src.stop(t + dur + 0.1); lfo.stop(t + dur + 0.1);
+    AudioEngine.cleanup(src, [src, f, chop, lfo, depth, env]);
   }
 
   shift(up) {

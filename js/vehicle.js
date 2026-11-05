@@ -18,18 +18,36 @@ export class Vehicle {
     this.bodyZFront = zFront;
     this.bodyZRear = zRear;
 
+    // Driven wheels (0/1 front, 2/3 rear)
+    this.drive = spec.drive || 'RWD';
+    this.driven = this.drive === 'FWD' ? [0, 1] : this.drive === 'AWD' ? [0, 1, 2, 3] : [2, 3];
+
     const body = new CANNON.Body({ mass: spec.mass, material: materials.chassis });
+    // Lowered suspension drops the whole body (rideDrop) relative to the wheels
+    const drop = spec.rideDrop || 0;
+    const groundY = (h) => h - drop - spec.cgHeight;
     // Lower body: 0.25 m → 0.90 m above ground
-    const lowerH = 0.65, lowerY = 0.25 + lowerH / 2 - spec.cgHeight;
-    body.addShape(
-      new CANNON.Box(new CANNON.Vec3(spec.width / 2, lowerH / 2, spec.length / 2)),
-      new CANNON.Vec3(0, lowerY, (zFront + zRear) / 2),
-    );
+    const lowerH = 0.65, lowerY = groundY(0.25 + lowerH / 2);
+    const lowerBox = new CANNON.Box(new CANNON.Vec3(spec.width / 2, lowerH / 2, spec.length / 2));
+    const cabinBox = new CANNON.Box(new CANNON.Vec3(0.72, 0.22, 0.95));
+    body.addShape(lowerBox, new CANNON.Vec3(0, lowerY, (zFront + zRear) / 2));
     // Greenhouse
-    body.addShape(
-      new CANNON.Box(new CANNON.Vec3(0.72, 0.22, 0.95)),
-      new CANNON.Vec3(0, 1.12 - spec.cgHeight, zFront + 0.6 * spec.length),
-    );
+    body.addShape(cabinBox, new CANNON.Vec3(0, groundY(1.12), zFront + 0.6 * spec.length));
+    // On hilly terrain (heightfield) the boxes only meet the barriers; spheres at the body corners
+    // and roof touch the ground instead (cheap against a heightfield, and only matter in a crash)
+    if (materials.terrainGroup) {
+      lowerBox.collisionFilterMask = cabinBox.collisionFilterMask = ~materials.terrainGroup;
+      // (kept to six: cannon tests every chassis shape against every barrier panel nearby)
+      const r = 0.3, hw = spec.width / 2 - r, zc = zFront + 0.6 * spec.length;
+      const pts = [];
+      for (const z of [zFront + 0.4, zRear - 0.4]) for (const x of [-hw, hw]) pts.push([x, groundY(0.25 + r), z]);
+      for (const x of [-0.45, 0.45]) pts.push([x, groundY(1.32 - r), zc]);
+      for (const [x, y, z] of pts) {
+        const sph = new CANNON.Sphere(r);
+        sph.collisionFilterMask = materials.terrainGroup;
+        body.addShape(sph, new CANNON.Vec3(x, y, z));
+      }
+    }
     const I = spec.inertia;
     body.inertia.set(I.pitch, I.yaw, I.roll);
     body.invInertia.set(1 / I.pitch, 1 / I.yaw, 1 / I.roll);
@@ -47,7 +65,7 @@ export class Vehicle {
     // puts wheel centres at tyre radius above the ground.
     const staticCompression = 9.81 / (4 * spec.suspensionStiffness);
     const restLen = spec.suspensionRestLength;
-    const hubY = spec.wheelRadius - spec.cgHeight;
+    const hubY = spec.wheelRadius - spec.cgHeight;   // wheels stay put when lowered: the body drops round them
     const connY = hubY + (restLen - staticCompression);
     const base = {
       radius: spec.wheelRadius,
@@ -80,6 +98,7 @@ export class Vehicle {
     this.rearLoose = 0;        // 0..0.6 rear lateral grip lost to wheelspin
     this.slideAngle = 0;       // body slip angle, degrees
     this.frontSlide = 0;
+    this.frontLoose = 0;
     this.wheelSpin = [0, 0, 0, 0];
     this.surfaceMu = 1;
     this.surfaceDrag = 1;
@@ -87,6 +106,7 @@ export class Vehicle {
     this.wallTimer = 0;
     this.wheelie = 0;          // 0..1 wheelie drive this step
     this.wheelieAmt = 0;
+    this.wheelieHold = 0;
     this.pitch = 0;            // nose-up angle (rad)        // seconds since/while scraping a barrier: stabilises the slide
     this._fwd = new CANNON.Vec3();
     this._right = new CANNON.Vec3();
@@ -158,7 +178,7 @@ export class Vehicle {
     // pushes past the request, so it can't spin the car; it switches off while sliding.
     if (Math.abs(v) > 4 && Math.abs(d) > 0.01 && this.rearLoose < 0.15) {
       const want = v * Math.tan(d) / s.wheelbase;
-      const cap = 1.6 * 9.81 / Math.abs(v);
+      const cap = (s.turnInAssist || 1.6) * 9.81 / Math.abs(v);
       const target = clamp(want, -cap, cap);
       const yaw = b.angularVelocity.y;
       if (Math.sign(target) === Math.sign(want) && Math.abs(yaw) < Math.abs(target) && Math.sign(yaw || target) === Math.sign(target)) {
@@ -166,33 +186,43 @@ export class Vehicle {
       }
     }
 
-    // --- Drivetrain → rear tyres
+    // --- Drivetrain → driven tyres (rear, front or all four)
+    const hbOn = !!input.handbrake;
+    const rwd = this.drive === 'RWD';
     dtn.throttleInput = input.throttle;
     dtn.brakeInput = input.brake;
     this.brakeInput = input.brake;
     dtn.clutchPedal = input.clutch;
-    dtn.handbrake = input.handbrake ? 1 : 0;
-    const Nl = wi[2].raycastResult.body ? wi[2].suspensionForce : 0;
-    const Nr = wi[3].raycastResult.body ? wi[3].suspensionForce : 0;
-    const N = Nl + Nr;
+    // The hand brake always locks the rears. RWD: through the driven axle (clutch opens so it can't
+    // stall). AWD: the clutch opens and the rears are braked separately. FWD: the rears just lock.
+    dtn.handbrake = hbOn && this.drive !== 'FWD' ? 1 : 0;
+    const drv = this.driven;
+    const load = (i) => (wi[i].raycastResult.body ? wi[i].suspensionForce : 0);
+    let N = 0;
+    for (const i of drv) N += load(i);
     const mu = s.tyreMu * this.surfaceMu;
     const F = dtn.step(dt, v, N, mu);
-    if (N > 1) {
-      this.vehicle.applyEngineForce(F * Nl / N, 2);
-      this.vehicle.applyEngineForce(F * Nr / N, 3);
-    } else {
-      this.vehicle.applyEngineForce(0, 2);
-      this.vehicle.applyEngineForce(0, 3);
+    // AWD with the hand brake pulled: the rears are locked, so only the fronts carry drive
+    const hbAwd = hbOn && this.drive === 'AWD';
+    let Nd = 0;
+    for (const i of drv) if (!(hbAwd && i >= 2)) Nd += load(i);
+    for (let i = 0; i < 4; i++) {
+      const isDriven = drv.includes(i) && !(hbAwd && i >= 2);
+      this.vehicle.applyEngineForce(isDriven && Nd > 1 ? F * load(i) / Nd : 0, i);
     }
 
-    // Wheelspin / lock-up eats rear lateral grip → power oversteer. The fall-off is progressive
-    // and never below ~40 %, so a spinning rear steps out into a slide rather than snapping round.
+    // Wheelspin / lock-up eats lateral grip on the driven axle: power oversteer on the RWD car, power
+    // understeer on the FWD one (both ends, a little, on AWD). The fall-off is progressive and never
+    // below ~45 %, so a spinning rear steps out into a slide rather than snapping round.
     const sl = Math.abs(dtn.slip);
     const latFactor = Math.max(0.45, 1 / (1 + Math.pow(Math.max(0, sl - 0.08) * 2.0, 1.5)));
     // Hand brake: locked rears slide sideways easily → the tail swings out into a drift
-    const hb = dtn.handbrake && Math.abs(v) > 3 ? 0.5 : 1;
-    wi[2].frictionSlip = wi[3].frictionSlip = s.frictionSlipRear * mu * latFactor * hb;
-    this.rearLoose = 1 - latFactor * hb;
+    const hb = hbOn && Math.abs(v) > 3 ? 0.5 : 1;
+    const rearLat = this.drive === 'FWD' ? 1 : latFactor;
+    const frontLat = this.drive === 'RWD' ? 1 : latFactor;
+    wi[2].frictionSlip = wi[3].frictionSlip = s.frictionSlipRear * mu * rearLat * hb;
+    this.rearLoose = 1 - rearLat * hb;
+    this.frontLoose = 1 - frontLat;
 
     // Drift feel: extra yaw damping while the rear is loose makes the rotation build gradually
     // (holdable with throttle and counter-steer instead of an instant spin)
@@ -201,7 +231,7 @@ export class Vehicle {
     // Wheelie: a launch-control or nitrous start puts so much torque through the rears that the
     // nose rears up and the front wheels leave the ground for a moment. Pitch-up torque scales
     // with drive force, fades with speed and is capped near 6° so the car always comes back down.
-    const boost = Math.max(dtn.launchTimer > 0 ? 1 : 0, dtn.nitrousAmt);
+    const boost = s.wheelieTorque > 0 ? Math.max(dtn.launchTimer > 0 ? 1 : 0, dtn.nitrousAmt) : 0;
     let wl = boost * clamp((F - 7000) / 9000, 0, 1) * clamp(1 - Math.abs(v) / 17, 0, 1);
     b.quaternion.vmult(this._tmp.set(0, 0, -1), this._tmp);
     const pitch = Math.asin(clamp(this._tmp.y, -1, 1));
@@ -209,7 +239,9 @@ export class Vehicle {
     wl *= clamp((0.1 - pitch) / 0.07, 0, 1);                 // soft cap: eases off from ~2° to ~6°
     this.wheelieAmt += (wl - this.wheelieAmt) * Math.min(1, dt * 6);   // ramp in/out, no jolts
     this.wheelie = this.wheelieAmt;
-    if (this.wheelieAmt > 0.01 || pitch > 0.02) {
+    // (damping keeps running ~1 s after the lift so the nose settles; not on hills, where pitch is just the grade)
+    if (this.wheelieAmt > 0.01) this.wheelieHold = 1; else if (this.wheelieHold > 0) this.wheelieHold -= dt;
+    if (rwd && (this.wheelieAmt > 0.01 || (this.wheelieHold > 0 && pitch > 0.02))) {
       // Pitch-rate damping while the nose is up, so it settles back down instead of slamming
       b.quaternion.vmult(this._right.set(1, 0, 0), this._right);
       const pitchRate = b.angularVelocity.dot(this._right);
@@ -222,14 +254,18 @@ export class Vehicle {
     const slideAngle = Math.abs(v) > 4 ? Math.atan2(Math.abs(vLat), Math.abs(v)) * 57.3 : 0;
     this.slideAngle = slideAngle;
     dtn.stabilityCut = dtn.tractionControl ? clamp((slideAngle - 28) / 22, 0, 0.75) : 0;
-    wi[0].frictionSlip = wi[1].frictionSlip = s.frictionSlipFront * mu;
+    wi[0].frictionSlip = wi[1].frictionSlip = s.frictionSlipFront * mu * frontLat;
 
-    // Front disc brakes (cannon brake value is an impulse per step)
-    const fb = input.brake * s.maxBrakeForce * s.brakeBiasFront * 0.5 * dt;
+    // Service brakes on the undriven axle (cannon's brake is an impulse per step; the driven axle is
+    // braked inside the drivetrain), plus the hand brake on the rears of the FWD and AWD cars
+    const bias = s.brakeBiasFront;
+    const fb = this.drive === 'RWD' ? input.brake * s.maxBrakeForce * bias * 0.5 * dt : 0;
+    const rbService = this.drive === 'FWD' ? input.brake * s.maxBrakeForce * (1 - bias) * 0.5 * dt : 0;
+    const rbHand = hbOn && !rwd ? s.handbrakeTorque / s.wheelRadius * 0.5 * dt : 0;
     this.vehicle.setBrake(fb, 0);
     this.vehicle.setBrake(fb, 1);
-    this.vehicle.setBrake(0, 2);
-    this.vehicle.setBrake(0, 3);
+    this.vehicle.setBrake(rbService + rbHand, 2);
+    this.vehicle.setBrake(rbService + rbHand, 3);
 
     // --- Aero drag + rolling resistance
     const vel = b.velocity;
@@ -256,8 +292,10 @@ export class Vehicle {
 
     // Visual wheel spin rates
     const fw = v / s.wheelRadius;
-    this.wheelSpin[0] = this.wheelSpin[1] = input.brake > 0.85 && Math.abs(v) < 0.3 ? 0 : fw;
-    this.wheelSpin[2] = this.wheelSpin[3] = dtn.wheelW;
+    for (let i = 0; i < 4; i++) {
+      const locked = (i >= 2 && hbOn) || (input.brake > 0.85 && Math.abs(v) < 0.3);
+      this.wheelSpin[i] = drv.includes(i) && !(hbAwd && i >= 2) ? dtn.wheelW : locked ? 0 : fw;
+    }
   }
 
   /** Grip loss metric 0..1 for tyre squeal & smoke. */

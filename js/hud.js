@@ -22,6 +22,7 @@ export class HUD {
     this.startBtn = document.getElementById('btn-start');
     this.toastTimer = 0;
     this.units = 'kmh';
+    this.fmt = fmtTime;        // the drag strip shows plain seconds
     this.setRange(6500);
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -117,9 +118,9 @@ export class HUD {
       el.className = t.rpm >= th ? (flash ? 'flash' : i < 2 ? 'g' : i < 4 ? 'y' : 'r') : '';
     });
 
-    this.lapEl.textContent = fmtTime(t.lapTime);
-    this.lastEl.textContent = fmtTime(t.lastLap);
-    this.bestEl.textContent = fmtTime(t.bestLap);
+    this.lapEl.textContent = this.fmt(t.lapTime);
+    this.lastEl.textContent = this.fmt(t.lastLap);
+    this.bestEl.textContent = this.fmt(t.bestLap);
     this.lapNoEl.textContent = t.lap;
     this.startBtn.classList.toggle('show', !t.running && !t.cranking);
 

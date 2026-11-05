@@ -48,10 +48,10 @@ export const SPEC = {
     [4600, 910], [5500, 885], [6200, 804], [6800, 700], [7400, 470],
   ],
 
-  // Drivetrain — long-legged 5-speed, 3.23 rear axle, Sure-Grip diff
+  // Drivetrain — 5-speed, 3.55 Sure-Grip rear axle
   gears: [2.95, 1.94, 1.34, 1.00, 0.80],
   reverse: 3.00,
-  finalDrive: 3.23,
+  finalDrive: 3.55,
   drivetrainEfficiency: 0.88,
   clutchMaxTorque: 1650,
   rearAxleInertia: 2.6,      // both rear wheels + axle + driveshaft
@@ -75,7 +75,7 @@ export const SPEC = {
 export const PHYSICS_DT = 1 / 120;
 
 // Shown in the menu so it's easy to confirm which version a phone is running (sw.js VERSION matches).
-export const BUILD = 12;
+export const BUILD = 13;
 
 // Car body vs barriers: frictionless and barely bouncy, so the car glances off and slides along
 // the wall instead of snagging, spinning round or stopping dead.
