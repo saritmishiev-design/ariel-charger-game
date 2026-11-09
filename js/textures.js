@@ -216,7 +216,8 @@ function fitText(ctx, text, maxW, size, font) {
 
 /** 1024×512 (2:1) billboard faces, text as large as the face allows. kind: 'sentra' | 'sarit' */
 export const BILLBOARD_ASPECT = 2;
-export function billboardTexture(kind) {
+/** kind 'sarit' | 'sentra'; info { hp, sentra } = the spawned car's tuned power and whether it IS the Sentra. */
+export function billboardTexture(kind, info = { hp: 700, sentra: false }) {
   // Drawn in 1024×512 units on a 2× canvas so the text stays crisp up close
   const w = 1024, h = 512, c = canvas(w * 2, h * 2), ctx = c.getContext('2d');
   ctx.scale(2, 2);
@@ -227,11 +228,13 @@ export function billboardTexture(kind) {
     ctx.fillStyle = '#ffe414'; ctx.fillRect(0, 0, w, h);
     ctx.strokeStyle = '#111'; ctx.lineWidth = 14; ctx.strokeRect(14, 14, w - 28, h - 28);
     ctx.fillStyle = '#111';
-    fitText(ctx, 'Enjoy the 700HP!', w - 120, 46, 'italic 800');
-    ctx.fillText('Enjoy the 700HP!', w / 2, 58);
+    const head = `Enjoy the ${Math.round(info.hp).toLocaleString('en-US')}HP!`;
+    fitText(ctx, head, w - 120, 46, 'italic 800');
+    ctx.fillText(head, w / 2, 58);
     ctx.fillRect(w / 2 - 150, 88, 300, 4);
-    const punch = ['But don\'t forget', 'you drive a', 'Nissan Sentra', 'in real life.'];
-    const ys = [150, 246, 350, 448], sizes = [98, 98, 120, 98];
+    // Driving the Sentra itself: the joke turns on Ariel
+    const punch = info.sentra ? ['Wait... this IS', 'a Nissan Sentra.', 'Never mind.'] : ['But don\'t forget', 'you drive a', 'Nissan Sentra', 'in real life.'];
+    const ys = info.sentra ? [168, 296, 420] : [150, 246, 350, 448], sizes = info.sentra ? [104, 112, 104] : [98, 98, 120, 98];
     punch.forEach((line, i) => {
       fitText(ctx, line, w - 70, sizes[i], '900');
       ctx.fillText(line, w / 2, ys[i]);

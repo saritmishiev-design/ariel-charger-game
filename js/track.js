@@ -94,7 +94,8 @@ function noiseFill(ctx, w, h, base, spread, rand, dots = 9000) {
 }
 
 export class Track {
-  constructor(scene, world, materials, quality = 'high', id = 'classic') {
+  /** carInfo { hp, sentra }: the spawned car, for the billboard text. */
+  constructor(scene, world, materials, quality = 'high', id = 'classic', carInfo = { hp: 700, sentra: false }) {
     const def = DEFS[id] || DEFS.classic;
     this.id = DEFS[id] ? id : 'classic';
     this.def = def;
@@ -152,7 +153,7 @@ export class Track {
     this.buildStartLine();
     this.buildScenery();
     if (this.isDrag) this.buildDragStrip();
-    this.billboards = buildBillboards(this, this.group);
+    this.billboards = buildBillboards(this, this.group, carInfo);
     buildTrees(this, this.group, this.rand, quality, this.billboards.spots);
     buildGrassTufts(this, this.group, this.rand, quality);
     buildMountains(this.group, this.rand, this.bounds);

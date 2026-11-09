@@ -1,6 +1,6 @@
 // Service worker: precache everything so the game runs offline from the home screen.
 // Bump VERSION whenever files change to roll out an update.
-const VERSION = 'charger-v13';   // keep in step with BUILD in js/config.js
+const VERSION = 'charger-v14';   // keep in step with BUILD in js/config.js
 const ASSETS = [
   './',
   './index.html',

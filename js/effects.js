@@ -25,7 +25,8 @@ function puffTexture() {
 
 /** Billowing 3D tyre smoke: camera-facing, rotating, sun-shaded puffs (instanced quads). */
 export class TyreSmoke {
-  constructor(scene, max = 700, sunDir = new THREE.Vector3(0.5, 0.42, 0.45).normalize()) {
+  constructor(scene, max = 700, sunDir = new THREE.Vector3(0.5, 0.42, 0.45).normalize(), { dark = false } = {}) {
+    this.dark = dark;   // oily black smoke (a blown engine) instead of white tyre smoke
     this.max = max;
     this.vel = new Float32Array(max * 3);
     this.life = new Float32Array(max);
@@ -80,7 +81,7 @@ export class TyreSmoke {
           float a = t.a * vA;
           if (a < 0.004) discard;
           float lit = clamp(0.55 + dot(vUv - 0.5, vLight) * 1.1 + (t.r - 0.85) * 0.8, 0.0, 1.0);
-          vec3 col = mix(vec3(0.50, 0.52, 0.56), vec3(0.97, 0.95, 0.92), lit);
+          vec3 col = ${dark ? 'mix(vec3(0.02, 0.02, 0.022), vec3(0.16, 0.15, 0.14), lit)' : 'mix(vec3(0.50, 0.52, 0.56), vec3(0.97, 0.95, 0.92), lit)'};
           gl_FragColor = vec4(col, a);
         }`,
     });

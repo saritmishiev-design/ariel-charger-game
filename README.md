@@ -12,6 +12,17 @@ Nissan GT-R and a 2023 Nissan Sentra, three tracks and a pre-race tuning garage.
   **Tyres** (street / racing slicks), **Suspension** (stock / lowered: body drops 45 mm, lower CoG, stiffer springs,
   far less roll). Performance bars (power, acceleration, top speed, grip, with a tick at stock) update instantly from
   the same physics spec the car drives with (js/cars.js).
+- **Engine builder for every car** (🔧 in the garage): bore, stroke, compression, cylinders, layout, induction and
+  boost (to 60 psi), gearbox and ratios, tyres — plus **build tiers** (Stock block / Forged / Race / Pro Mod billet:
+  block strength, breathing, knock limit, rev ceiling, anti-lag) and quick builds up to a **3,000+ hp Pro Mod swap**.
+  Big-power cars get stiffer springs automatically, and **Drag slicks** give the bite for violent launches.
+- **Lenco planetary gearbox:** clutch-pack shifts in 0 ms with no lift and no ignition cut. Also a heavy-duty drag box.
+- **Things break:** too much cylinder pressure for the block, detonation (extreme boost on low-octane builds),
+  bouncing off the limiter too long or a money-shift over-rev **blows the engine** (bang, fireball, black smoke,
+  no restart until RESET). Launch torque beyond the gearbox's rating **shreds the transmission** (no drive, the engine
+  revs free). The garage and dyno warn you; a HUD gauge shows engine and gearbox strain while driving.
+- **Billboards** show the spawned car's tuned power ("Enjoy the 3,062HP!") — and in the Sentra they admit
+  "Wait... this IS a Nissan Sentra. Never mind."
 - **Cars:** 1979 Dodge Charger (RWD, 700 hp blown Hemi, drift-happy); Nissan GT-R R35 tune (AWD, 800 hp 3.8 L V6
   twin-turbo, DCT, ~1.7 g grip, launches to 100 in ~3.4 s, V6 voice with turbo whistle and blow-off flutter);
   2023 Nissan Sentra SV (FWD, 149 hp 2.0 L inline-4, CVT-style automatic, all-season tyres, heavy understeer,
@@ -24,7 +35,7 @@ Nissan GT-R and a 2023 Nissan Sentra, three tracks and a pre-race tuning garage.
   a timing tower, and best ET per car.
 - **Real dimensions:** 5.48 m long, 2.92 m wheelbase, 1.96 m wide, 1,770 kg, 56/44 front weight, low CoM, soft '70s springs.
 - **Drivetrain sim:** torque curve peaking at 910 Nm / 700 hp @ 6,200 rpm, engine inertia, idle governor, rev limiter,
-  friction clutch (slip, bite point, stalling), 5-speed (2.95 / 1.94 / 1.34 / 1.00 / 0.80, 3.55 Sure-Grip axle),
+  friction clutch (slip, bite point, stalling), 5-speed (2.95 / 1.94 / 1.34 / 1.00 / 0.80, 3.23 axle, 316 km/h top speed),
   rear axle with Pacejka-style tyre slip → wheelspin, power oversteer and rear lock-ups (no ABS).
 - **Power slides:** flooring it in 1st or 2nd breaks the rears loose (torque kick near the soft limiter), the
   rear steps out progressively and can be held with throttle and counter-steer; traction control allows the
@@ -91,7 +102,7 @@ js/cars.js, pregame.js         car line-up, tracks, lite tunes → physics spec,
 js/drivetrain.js               engine / clutch / gearbox / driven-axle model
 js/build.js, garage.js         garage build → engine model & spec, dyno + drag-strip sim, garage UI
 js/vehicle.js                  cannon-es raycast vehicle + steering, brakes, aero
-js/carModel.js, bodies.js      procedural 3D Charger, GT-R and Sentra, wheels
+js/carModel.js, bodies.js      procedural 3D Charger (extruded) and lofted GT-R and Sentra, wheels, wheel wells
 js/track.js                    the three tracks: road, terrain/heightfield, curbs, barriers, stands, drag-strip tree
 js/scenery.js                  trees, grass tufts, mountains, billboards, LOD
 js/sky.js, textures.js         sky dome + environment map, procedural textures

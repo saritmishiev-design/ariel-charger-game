@@ -48,6 +48,7 @@
     </div>
 
     <button id="btn-start" aria-label="Start engine"><span>START</span><small>ENGINE</small></button>
+ <div id="health" aria-label="Engine and gearbox strain"><div class="h-row"><span>ENGINE</span><b class="h-eng"><i></i></b></div><div class="h-row"><span>GEARBOX</span><b class="h-tr"><i></i></b></div></div>
     <div id="dragtree" aria-label="Christmas tree"><i class="st"></i><i class="am"></i><i class="am"></i><i class="am"></i><i class="gr"></i><i class="rd"></i></div>
     <div id="drag-result" role="status" aria-live="polite"></div>
     <div id="toast"></div>
@@ -187,7 +188,7 @@
   <div id="garage" aria-label="Garage and dyno">
     <header class="g-top">
       <button id="g-back" class="ghost">‹ BACK</button>
-      <h2>GARAGE <span>&amp; DYNO</span></h2>
+      <h2>GARAGE <span>&amp; DYNO</span> <small id="g-car"></small></h2>
       <button id="g-stock" class="ghost">STOCK</button>
       <button id="g-apply" class="primary">DRIVE</button>
     </header>

@@ -552,3 +552,29 @@ body.drag #dragtree { display: flex; }
 #drag-result li b { color: var(--text); font-variant-numeric: tabular-nums; }
 #drag-result p { margin: 4px 0 0; font-size: 9px; color: var(--muted); }
 #laps #lap-label, #prog-label { font-style: normal; }
+
+/* ---------------- Engine / gearbox health ---------------- */
+#health {
+  position: absolute; right: calc(10px + var(--sr)); top: calc(62px + var(--st));
+  display: none; flex-direction: column; gap: 3px; padding: 5px 8px; width: 150px;
+  background: rgba(8, 8, 10, 0.7); border: 1px solid var(--line); border-radius: 9px;
+}
+#health.show { display: flex; }
+#health .h-row { display: grid; grid-template-columns: 56px 1fr; align-items: center; gap: 6px; }
+#health span { font-size: 8.5px; letter-spacing: 1.5px; color: var(--muted); }
+#health b { display: block; height: 7px; border-radius: 4px; background: rgba(255, 255, 255, 0.1); overflow: hidden; }
+#health b i { display: block; height: 100%; background: #5fe08a; transition: width 0.15s; }
+#health b.edge i { background: #ffb347; }
+#health b.bad i { background: #ff3030; animation: hflash 0.25s steps(2) infinite; }
+#health b.dead { background: #3a0c0c; }
+#health b.dead i { width: 100% !important; background: repeating-linear-gradient(45deg, #ff2020 0 5px, #300 5px 10px); }
+@keyframes hflash { 50% { opacity: 0.35; } }
+.g-top h2 small { font-size: 11px; font-style: normal; color: var(--muted); letter-spacing: 1px; font-family: system-ui, sans-serif; }
+.g-meter { display: block; width: 100%; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.08); overflow: hidden; margin: 1px 0 2px; }
+.g-meter i { display: block; height: 100%; background: #5fe08a; }
+.g-meter.edge i { background: #ffb347; }
+.g-meter.bad i { background: #ff3030; }
+.g-fail { grid-column: 1 / -1; background: rgba(255, 40, 40, 0.15); border: 1px solid rgba(255, 60, 60, 0.6); color: #ffb0a8; border-radius: 9px; padding: 6px 8px; font-weight: 800; font-size: 12px; }
+.g-presets button { font-size: 11.5px; }
+#pg-stats .warn { color: #ffb347; font-weight: 700; }
+#pg-engine.custom { border-color: var(--accent) !important; color: var(--accent-2); }

@@ -9,7 +9,7 @@ import { AudioEngine } from './audio.js';
 import { HUD, fmtTime } from './hud.js';
 import { TyreSmoke, SkidMarks } from './effects.js';
 import { Sky, makeEnvMap, SUN_DIR, HORIZON } from './sky.js';
-import { STOCK, TRANS, sanitize } from './build.js';
+import { TRANS, sanitize } from './build.js';
 import { Garage } from './garage.js';
 import { CARS, TRACKS, sanitizeSetup, carSpec, carSummary } from './cars.js';
 import { PreGame } from './pregame.js';
@@ -29,9 +29,15 @@ const saveSettings = () => { try { localStorage.setItem('charger.settings', JSON
 let setup = sanitizeSetup(null);
 try { setup = sanitizeSetup(JSON.parse(localStorage.getItem('charger.setup') || 'null')); } catch (e) { /* defaults */ }
 const saveSetup = () => { try { localStorage.setItem('charger.setup', JSON.stringify(setup)); } catch (e) { /* ignore */ } };
-// The Charger's engine-builder build (Garage & Dyno)
-let build = sanitize(STOCK);
-try { build = sanitize(JSON.parse(localStorage.getItem('charger.build') || 'null')); } catch (e) { /* defaults */ }
+// Engine-builder builds per car (null = factory engine). The Charger's keeps its original key.
+const buildKey = (id) => (id === 'charger' ? 'charger.build' : `charger.build.${id}`);
+const builds = {};
+for (const id of Object.keys(CARS)) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(buildKey(id)) || 'null');
+    builds[id] = saved ? sanitize(saved, CARS[id].build) : null;
+  } catch (e) { builds[id] = null; }
+}
 
 // Best lap / best ET per track and car (the old single best lap belonged to the classic Charger)
 const bestKey = () => `charger.best.${setup.track}.${setup.car}`;
@@ -44,7 +50,7 @@ const loadBest = () => { try { bestLap = parseFloat(localStorage.getItem(bestKey
 
 // Filled in by prepareSpec() / buildWorld() once the player hits RACE
 let SPEC = null, ENGINE = null, CAR_BUILD = null, SEQ = false;
-let track = null, vehicle = null, car = null, smoke = null, skids = null, built = false;
+let track = null, vehicle = null, car = null, smoke = null, darkSmoke = null, skids = null, built = false;
 const COCKPIT_EYE = new THREE.Vector3(), HOOD_EYE = new THREE.Vector3();
 
 // ---------------- Renderer & scene ----------------
@@ -229,11 +235,71 @@ function resetCar() {
   vehicle.drivetrain.autoDrive = false;
   controls.forceNeutral();
   skids.last = [null, null, null, null];
+  repairCar();
+}
+
+/** A new run: fresh engine and gearbox (a blown engine is restarted for you). */
+function repairCar() {
+  const d = vehicle.drivetrain, was = d.blown || d.transBroken;
+  const blown = d.blown;
+  d.repair();
+  fail.smoke = 0; fail.warned = {};
+  if (!was) return;
+  d.requestGear(0, 0);
+  hud.toast(blown ? 'Fresh engine fitted — starting…' : 'Gearbox rebuilt', 1.8);
+  if (blown) setTimeout(crank, 500);
 }
 
 function crank() {
   const r = vehicle.drivetrain.start();
   if (r === 'clutch') hud.toast('Press the CLUTCH (or select N) to start', 2.2);
+}
+
+// ---------------- Catastrophic failures ----------------
+const BLOW_MSG = {
+  pressure: 'too much cylinder pressure for the block',
+  heat: 'held on the rev limiter too long',
+  overrev: 'over-revved — a missed shift',
+};
+const fail = { smoke: 0, smokeAcc: 0, warned: {} };
+function onBlown() {
+  const d = vehicle.drivetrain;
+  audio.engineBlow();
+  haptic([120, 60, 200]);
+  hud.toast(`💥 ENGINE BLOWN — ${BLOW_MSG[d.blowCause] || 'detonation melted a piston'}. ↺ RESET for a new one`, 5);
+  fail.smoke = 1;
+  nos.spit = 1.4;     // one big fireball out of the pipes
+  nos.armed = false;
+}
+function onTransBroken() {
+  audio.transBreak();
+  haptic([80, 40, 120]);
+  hud.toast('⚙ TRANSMISSION SHREDDED — no drive left. Fit a Lenco or HD box · ↺ RESET', 5);
+  fail.puff = 0.6;
+}
+/** Black smoke pouring from the engine bay, the health gauge and the early warnings. */
+function updateFailures(dt) {
+  const d = vehicle.drivetrain, b = vehicle.body, st = d.stress;
+  if (d.blown) fail.smoke = Math.max(0.25, fail.smoke - dt * 0.08);   // keeps smouldering
+  const puff = fail.puff > 0 ? (fail.puff -= dt, 1) : 0;
+  const rate = d.blown ? 60 * fail.smoke : puff ? 40 : 0;
+  if (rate > 0) {
+    tmpQ.set(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w);
+    // Engine bay (just behind the front axle, under the hood) — or under the car for the gearbox
+    const local = d.blown ? tmpS.set(0, 0.45 - (SPEC.rideDrop || 0), vehicle.frontAxleZ + 0.25) : tmpS.set(0, -0.3, (vehicle.frontAxleZ + vehicle.rearAxleZ) / 2);
+    const p = local.applyQuaternion(tmpQ).add(tmpV.set(b.position.x, b.position.y, b.position.z));
+    fail.smokeAcc += dt * rate;
+    while (fail.smokeAcc >= 1) { fail.smokeAcc -= 1; darkSmoke.emit(p.x, p.y, p.z, b.velocity.x, b.velocity.z, 0.9); }
+  }
+  darkSmoke.update(dt);
+  // Gauge: worst of block stress, limiter heat, accumulated damage; gearbox load and damage
+  const eng = d.blown ? 1.5 : Math.max(st.engine, st.heat, d.engineDamage);
+  const tr = d.transBroken ? 1.5 : Math.max(st.trans, d.transDamage);
+  hud.health(eng, tr, d.blown, d.transBroken);
+  if (!d.blown && st.heat > 0.5 && !fail.warned.heat) { fail.warned.heat = true; hud.toast('🔥 Engine overheating on the limiter — SHIFT UP!', 2); }
+  if (st.heat < 0.2) fail.warned.heat = false;
+  if (!d.blown && d.engineDamage > 0.3 && !fail.warned.eng) { fail.warned.eng = true; hud.toast('⚠ Engine knocking — too much pressure for this block!', 2); }
+  if (!d.transBroken && d.transDamage > 0.3 && !fail.warned.tr) { fail.warned.tr = true; hud.toast('⚠ Gearbox groaning — too much torque!', 2); }
 }
 
 // ---------------- Camera ----------------
@@ -461,6 +527,10 @@ function processEvents() {
       case 'launch': haptic(40); hud.toast('LAUNCH!', 0.9); break;
       case 'bov': audio.blowOff(vehicle.drivetrain.boostPsi / 15); break;
       case 'denied': haptic([20, 40, 20]); hud.toast('Stop the car to change direction', 1.4); break;
+      case 'blown': onBlown(); break;
+      case 'transBroken': onTransBroken(); break;
+      case 'blownStart': hud.toast('The engine is blown — ↺ RESET for a fresh one', 2); break;
+      case 'noGears': hud.toast('No gears left — ↺ RESET to rebuild the gearbox', 1.6); break;
       default: break;
     }
   }
@@ -553,6 +623,7 @@ function tick(dt, input) {
     } else smokeAcc[i] = 0;
   }
   smoke.update(dt);
+  updateFailures(dt);
 
   const d = vehicle.drivetrain;
   audio.update({
@@ -566,11 +637,11 @@ function tick(dt, input) {
   hud.update(track.isDrag ? {
     dt, rpm: d.rpm, speed: vehicle.speed, gear: d.gear, running: d.running, cranking: d.starterTime > 0,
     lapTime: drag.phase === 'run' ? state.simTime - drag.startT : drag.lastEt,
-    lastLap: drag.lastEt, bestLap, lap: drag.runs, autoDrive: d.autoDrive,
+    lastLap: drag.lastEt, bestLap, lap: drag.runs, autoDrive: d.autoDrive, broken: d.transBroken,
   } : {
     dt, rpm: d.rpm, speed: vehicle.speed, gear: d.gear, running: d.running, cranking: d.starterTime > 0,
     lapTime: state.lapStart != null ? state.time - state.lapStart : null,
-    lastLap: state.lastLap, bestLap, lap: state.lap, autoDrive: d.autoDrive,
+    lastLap: state.lastLap, bestLap, lap: state.lap, autoDrive: d.autoDrive, broken: d.transBroken,
   });
   updateProgress();
   syncNosUi();
@@ -682,6 +753,7 @@ function buildMenu() {
     state.lap = 0; state.lapStart = null; state.sector = 0; state.lastLap = null;
     nos.armed = false; nos.charge = 1;
     if (track.isDrag) dragReset();
+    repairCar();
     onGo();
   });
   // Back to the pre-game garage: the world is built for one car and track, so start a fresh page
@@ -729,7 +801,7 @@ function closeSettings() {
 
 /** Cheap part of the session build: the physics spec, so the engine sound can be configured in the gesture. */
 function prepareSpec() {
-  const cs = carSpec(setup.car, setup.tunes[setup.car], build);
+  const cs = carSpec(setup.car, setup.tunes[setup.car], builds[setup.car]);
   SPEC = cs.spec; ENGINE = cs.engine; CAR_BUILD = cs.build;
   SEQ = SPEC.transType !== 'manual';
   audio.configure({ cyl: SPEC.cylinders, layout: SPEC.layout, blower: SPEC.blower, turbo: SPEC.turbo, profile: SPEC.audio });
@@ -738,11 +810,12 @@ function prepareSpec() {
 /** Build the track, car, effects and HUD for the chosen setup (once per page load). */
 function buildWorld() {
   if (TRACKS[setup.track] && setup.track === 'ring') materials.terrainGroup = TERRAIN_GROUP;
-  track = new Track(scene, world, materials, settings.gfx, setup.track);
+  track = new Track(scene, world, materials, settings.gfx, setup.track, { hp: ENGINE.peakHp, sentra: setup.car === 'sentra' });
   vehicle = new Vehicle(world, SPEC, materials);
   car = new CarModel(vehicle, envMap);
   scene.add(car.root, car.contact);
   smoke = new TyreSmoke(scene, HIGH ? 700 : 360, SUN_DIR);
+  darkSmoke = new TyreSmoke(scene, 260, SUN_DIR, { dark: true });
   smoke.setViewportHeight(window.innerHeight * renderer.getPixelRatio());
   skids = new SkidMarks(scene);
   // Driver's eye and the hood cam, from the car's own measurements (ground height, metres behind the front axle)
@@ -896,22 +969,30 @@ for (const [id, dir] of [['seq-up', 1], ['seq-down', -1]]) {
 }
 setInterval(syncSeqLabels, 250);
 
-// ---------------- Pre-game garage & the Charger's engine builder ----------------
+// ---------------- Pre-game garage & the engine builder (every car) ----------------
 const pregame = new PreGame({
-  setup, custom: build,
+  setup, builds,
   onChange: () => saveSetup(),
   onRace: () => race(),
   onSettings: () => openSettings(),
-  onEngine: () => { pregame.hide(); garage.show(); },
+  onEngine: () => {
+    const id = setup.car, c = CARS[id];
+    garage.setCar({ base: c.base, stock: c.build, current: builds[id], name: c.name, fwd: c.base.drive === 'FWD' });
+    pregame.hide();
+    garage.show();
+  },
 });
 const garage = new Garage({
-  baseSpec: CARS.charger.base,
-  current: build,
   onApply: (b, changed) => {
     if (changed) {
-      build = sanitize(b);
-      try { localStorage.setItem('charger.build', JSON.stringify(build)); } catch (e) { /* private mode: this session only */ }
-      pregame.setCustom(build);
+      const id = setup.car;
+      const factory = JSON.stringify(b) === JSON.stringify(sanitize(CARS[id].build, CARS[id].build));
+      builds[id] = factory ? null : b;
+      try {
+        if (factory) localStorage.removeItem(buildKey(id));
+        else localStorage.setItem(buildKey(id), JSON.stringify(b));
+      } catch (e) { /* private mode: this session only */ }
+      pregame.setBuilds(builds);
     }
     garage.hide();
     race();   // DRIVE: straight onto the track with the new engine

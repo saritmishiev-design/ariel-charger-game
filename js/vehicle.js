@@ -201,7 +201,8 @@ export class Vehicle {
     let N = 0;
     for (const i of drv) N += load(i);
     const mu = s.tyreMu * this.surfaceMu;
-    const F = dtn.step(dt, v, N, mu);
+    // Drag slicks: far more straight-line bite (driveMuK) than their cornering grip suggests
+    const F = dtn.step(dt, v, N, mu * (s.driveMuK || 1));
     // AWD with the hand brake pulled: the rears are locked, so only the fronts carry drive
     const hbAwd = hbOn && this.drive === 'AWD';
     let Nd = 0;

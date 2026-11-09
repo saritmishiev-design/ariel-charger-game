@@ -1,5 +1,5 @@
 // Pre-game garage: pick a track and a car, toggle the tunes, watch the performance bars move.
-import { CARS, TRACKS, TUNES, TUNE_DEFAULT, carSpec, performance, carSummary } from './cars.js';
+import { CARS, TRACKS, TUNES, TUNE_DEFAULT, carSpec, performance, carSummary, limits } from './cars.js';
 import { trackOutline } from './track.js';
 
 const $ = (id) => document.getElementById(id);
@@ -46,9 +46,9 @@ function drawOutline(canvas, id) {
 }
 
 export class PreGame {
-  constructor({ setup, custom, onChange, onRace, onSettings, onEngine }) {
+  constructor({ setup, builds, onChange, onRace, onSettings, onEngine }) {
     this.setup = setup;
-    this.custom = custom;
+    this.builds = builds;
     this.onChange = onChange;
     this.stockPerf = {};
     this.root = $('pregame');
@@ -108,7 +108,7 @@ export class PreGame {
     document.querySelectorAll('#pg-tracks .pg-card').forEach(b => drawOutline(b.querySelector('canvas'), b.dataset.id));
   }
 
-  setCustom(custom) { this.custom = custom; this.stockPerf = {}; this.refresh(); }
+  setBuilds(builds) { this.builds = builds; this.stockPerf = {}; this.refresh(); }
 
   refresh() {
     const s = this.setup, carId = s.car, car = CARS[carId], tune = s.tunes[carId];
@@ -121,18 +121,20 @@ export class PreGame {
       b.classList.toggle('on', tune[b.dataset.k] === b.dataset.v);
       if (b.dataset.k === 'turbo' && b.dataset.v === 'tt') b.textContent = car.tt.label || 'Twin turbo';
     });
+    const custom = this.builds[carId];
+    const { spec, engine, build } = carSpec(carId, tune, custom);
     const hints = {
-      turbo: tune.turbo === 'tt' ? (car.build.induction === 'turbo' ? 'More boost: more power, a little more lag' : 'Turbo conversion: big power up top, some lag') : 'Factory induction',
+      turbo: tune.turbo === 'tt' ? (build.induction === 'turbo' ? 'More boost: more power, a little more lag' : 'Turbo conversion: big power up top, some lag') : 'As built',
       final: { short: 'Quicker in every gear, lower top speed', stock: 'Factory ratio', long: 'Higher top speed, softer pull' }[tune.final],
-      tires: tune.tires === 'slicks' ? 'Massive grip and traction, later braking' : 'Lower grip: easier to slide and drift',
+      tires: { slicks: 'Massive grip and traction, later braking', drag: 'Huge launch bite for big power; modest in corners', street: 'Lower grip: easier to slide and drift' }[tune.tires],
       susp: tune.susp === 'lowered' ? 'Sits 45 mm lower: low CG, far less roll' : 'Factory ride height',
     };
     document.querySelectorAll('#pg-tunes .pg-tune').forEach((row, i) => { row.querySelector('.pg-hint').textContent = hints[Object.keys(TUNES)[i]]; });
 
-    const { spec, engine, build } = carSpec(carId, tune, this.custom);
     const p = performance(spec, engine);
     if (!this.stockPerf[carId]) {
-      const st = carSpec(carId, TUNE_DEFAULT, this.custom);
+      // The tick marks the factory car (no engine build, no tunes)
+      const st = carSpec(carId, TUNE_DEFAULT, null);
       this.stockPerf[carId] = performance(st.spec, st.engine);
     }
     const sp = this.stockPerf[carId];
@@ -151,13 +153,17 @@ export class PreGame {
       row.classList.toggle('up', d > 0.004);
       row.classList.toggle('down', d < -0.004);
     }
+    const L = limits(spec, engine);
     $('pg-stats').innerHTML = [
+      L.engineLevel === 'blow' ? '<span class="warn">💥 Engine over its limit — it will blow</span>' : L.engineLevel === 'edge' ? '<span class="warn">⚠ Engine near its limit</span>' : '',
+      L.transLevel === 'break' ? '<span class="warn">⚙ Gearbox too weak — a hard launch will shred it</span>' : L.transLevel === 'edge' ? '<span class="warn">⚠ Gearbox near its limit</span>' : '',
       `<span class="chip">${carSummary(carId, engine, build)}</span>`,
       `<span>¼ mile <b>${p.quarter ? p.quarter.t.toFixed(2) : '—'} s</b></span>`,
       `<span>torque <b>${Math.round(p.torque)} Nm</b></span>`,
       `<span>weight <b>${Math.round(spec.mass)} kg</b></span>`,
     ].join('');
-    $('pg-engine').style.display = car.custom ? '' : 'none';
+    $('pg-engine').textContent = custom ? `🔧 ENGINE BUILDER · ${Math.round(engine.peakHp)} HP CUSTOM BUILD` : '🔧 ENGINE BUILDER & DYNO';
+    $('pg-engine').classList.toggle('custom', !!custom);
     $('pg-race').textContent = `RACE ▶`;
     this.spec = spec;
   }

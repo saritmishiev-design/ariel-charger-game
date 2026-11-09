@@ -2,30 +2,50 @@
 // the full drivetrain on a simulated drag strip. Everything comes from build.js, the same model
 // the driving physics uses.
 import {
-  STOCK, LIMITS, CYLINDERS, LAYOUTS, INDUCTION, TRANS, layoutAllows, sanitize, engineModel,
-  deriveSpec, shiftSpeeds, balance, dragRun,
+  STOCK, LIMITS, CYLINDERS, LAYOUTS, INDUCTION, TRANS, TIERS, layoutAllows, sanitize, engineModel,
+  deriveSpec, shiftSpeeds, balance, dragRun, topSpeed,
 } from './build.js';
 
 const $ = (id) => document.getElementById(id);
 const fmt = (x, d = 0) => x.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 const GEAR_NAMES = ['1st', '2nd', '3rd', '4th', '5th'];
 
+// One-tap builds. The Pro Mod swap is the same for every car: a 9.1 L billet V8 on two huge turbos,
+// a Lenco and fat rear (or, on the front-drive Sentra, front) tyres — over 3,000 hp.
+const PRESETS = {
+  street: (stock) => ({ ...stock, tier: 'forged', induction: 'turbo', boost: Math.max(stock.boost, 18), cr: Math.min(stock.cr, 9.3) }),
+  race: (stock) => ({ ...stock, tier: 'race', induction: 'turbo', boost: 30, cr: Math.min(stock.cr, 9.5), trans: 'drag', gears: TRANS.drag.gears.slice(), final: 3.4 }),
+  promod: (stock, fwd) => ({
+    ...stock, tq: 1, knockCR: 0, bore: 115, stroke: 110, cr: 8.5, cyl: 8, layout: 'V', induction: 'turbo', boost: 56, tier: 'promod',
+    trans: 'lenco', gears: TRANS.lenco.gears.slice(), final: 2.9,
+    tireFront: fwd ? 355 : 225, tireRear: fwd ? 225 : 355, tireDia: 30,
+  }),
+};
+
 export class Garage {
-  constructor({ baseSpec, current, onApply, onClose }) {
-    this.base = baseSpec;
-    this.applied = sanitize(current);
-    this.b = sanitize(current);
+  constructor({ onApply, onClose }) {
     this.onApply = onApply;
     this.onClose = onClose;
-    this.stockEngine = engineModel(STOCK);
     this.el = $('garage');
+    this.setCar({ base: null, stock: STOCK, current: STOCK, name: '' }, true);
     this.buildUi();
-    this.refresh();
     window.addEventListener('resize', () => { if (this.open) this.drawDyno(); });
   }
 
+  /** Point the builder at a car: its base spec, factory build and current custom build. */
+  setCar({ base, stock, current, name, fwd = false }, silent = false) {
+    this.base = base;
+    this.stock = stock;
+    this.fwd = fwd;
+    this.applied = sanitize(current || stock, stock);
+    this.b = sanitize(current || stock, stock);
+    this.stockEngine = engineModel(stock, stock);
+    this.carName = name;
+    if (!silent) { $('g-car').textContent = name; this.syncControls(); }
+  }
+
   show() {
-    this.b = sanitize(this.applied);
+    this.b = sanitize(this.applied, this.stock);
     this.syncControls();
     this.refresh();
     this.el.classList.add('show');
@@ -90,6 +110,23 @@ export class Garage {
   buildUi() {
     this.controls = [];
     const left = this.el.querySelector('.g-left');
+    // Presets and build tier
+    const pre = this.card(left, 'QUICK BUILDS', 'tap one, then fine-tune below');
+    const pr = document.createElement('div');
+    pr.className = 'seg g-seg g-presets';
+    for (const [k, label] of [['factory', 'Factory'], ['street', 'Street 1k'], ['race', 'Race'], ['promod', '⚡ 3,000 HP']]) {
+      const btn = document.createElement('button');
+      btn.type = 'button'; btn.textContent = label;
+      btn.addEventListener('click', () => {
+        this.b = sanitize(k === 'factory' ? this.stock : PRESETS[k](this.stock, this.fwd), this.stock);
+        this.syncControls(); this.refresh();
+      });
+      pr.appendChild(btn);
+    }
+    pre.appendChild(pr);
+    const tierCard = this.card(left, 'ENGINE BUILD', 'what the block, rods and pistons can take');
+    this.seg(tierCard, 'tier', 'Tier', Object.entries(TIERS).map(([k, t]) => [k, t.short]));
+    this.tierInfo = this.info(tierCard);
     // Engine block
     const eng = this.card(left, 'ENGINE BLOCK', 'bore × stroke × cylinders = displacement');
     this.slider(eng, 'bore', 'Bore (piston width)', ' mm', 1);
@@ -111,7 +148,7 @@ export class Garage {
     this.indInfo = this.info(ind);
     // Transmission
     const tr = this.card(left, 'TRANSMISSION');
-    this.seg(tr, 'trans', 'Type', Object.entries(TRANS).map(([k, t]) => [k, t.name.replace('Sequential ', '')]), (v) => {
+    this.seg(tr, 'trans', 'Type', Object.entries(TRANS).map(([k, t]) => [k, t.short]), (v) => {
       this.b.trans = v;
       this.b.gears = TRANS[v].gears.slice();     // each box comes with its own ratios; tune below
       this.b.final = TRANS[v].final;
@@ -145,7 +182,7 @@ export class Garage {
     // Buttons
     $('g-back').addEventListener('click', () => { this.hide(); this.onClose && this.onClose(); });
     $('g-apply').addEventListener('click', () => this.apply());
-    $('g-stock').addEventListener('click', () => { this.b = sanitize(STOCK); this.syncControls(); this.refresh(); });
+    $('g-stock').addEventListener('click', () => { this.b = sanitize(this.stock, this.stock); this.syncControls(); this.refresh(); });
     $('g-run').addEventListener('click', () => this.run());
     this.syncControls();
   }
@@ -160,9 +197,18 @@ export class Garage {
 
   // ------------------------------------------------------------------ live numbers
   refresh() {
-    const b = this.b = sanitize(this.b);
-    const e = this.engine = engineModel(b);
-    const spec = this.spec = { ...this.base, ...deriveSpec(this.base, b) };
+    const b = this.b = sanitize(this.b, this.stock);
+    const e = this.engine = engineModel(b, this.stock);
+    const spec = this.spec = { ...this.base, ...deriveSpec(this.base, b, this.stock) };
+    const T = TIERS[b.tier], tr = TRANS[b.trans];
+    const engLoad = e.peakTorque / spec.blockTorque, trLoad = e.peakTorque / spec.transRating;
+    const meter = (x) => `<i class="g-meter ${x > 1.02 ? 'bad' : x > 0.9 ? 'edge' : ''}"><i style="width:${Math.min(100, x * 100).toFixed(0)}%"></i></i>`;
+    this.tierInfo.innerHTML =
+      `<span>Block rated <b>${fmt(spec.blockTorque)} Nm</b> · engine makes <b>${fmt(e.peakTorque)} Nm</b></span>${meter(engLoad)}` +
+      (engLoad > 1.02 ? '<span class="warn">💥 Over the limit: this engine will blow under full load — upgrade the tier or lower the boost</span>'
+        : e.detonation > 0 ? '<span class="warn">💥 Detonation: far too much boost for this compression and fuel — it will melt a piston</span>'
+          : engLoad > 0.9 ? '<span class="warn">⚠ Right at the limit</span>' : '<span class="ok">✓ Inside the block\'s limit</span>') +
+      `<span>Limiter abuse: blows after ${T.heat} s on the rev limiter</span>`;
     const sq = b.bore / b.stroke;
     const pistonMs = 2 * b.stroke / 1000 * e.redline / 60;
     this.engInfo.innerHTML =
@@ -178,9 +224,12 @@ export class Garage {
         (e.knockLimited ? `<span class="warn">⚠ Knock: timing pulled ${fmt(e.knockLoss * 100)}% — lower compression or boost</span>` : '<span class="ok">✓ No knock</span>') +
         (e.turbo ? '<span>Turbo lag: boost builds with revs and throttle</span>' : '');
     const ss = shiftSpeeds(spec);
-    this.trInfo.innerHTML = `<span>${TRANS[b.trans].name} · shift ${fmt(TRANS[b.trans].shiftTime * 1000)} ms</span>` +
+    this.trInfo.innerHTML = `<span>${tr.name} · shift <b>${fmt(tr.shiftTime * 1000)} ms</b>${b.trans === 'lenco' ? ' · no-lift, no cut' : ''}</span>` +
+      `<span>Rated <b>${fmt(spec.transRating)} Nm</b></span>${meter(trLoad)}` +
+      (trLoad > 1.05 ? '<span class="warn">⚙ Too much torque: a hard launch will shred this gearbox — fit the HD drag box or a Lenco</span>'
+        : trLoad > 0.9 ? '<span class="warn">⚠ Near the gearbox\'s limit</span>' : '<span class="ok">✓ Gearbox can take it</span>') +
       ss.map((v, i) => `<span class="chip">${GEAR_NAMES[i]} <b>${fmt(v)}</b></span>`).join('') + '<span class="muted">km/h at redline</span>';
-    const bal = balance(spec), stockBal = 1.25 / 1.15;
+    const bal = balance(spec), stockBal = this.base.frictionSlipRear / this.base.frictionSlipFront;
     const balTxt = bal < 1 ? '<span class="warn">⚠ Oversteer-prone: front out-grips the rear</span>'
       : bal < stockBal * 0.97 ? '<span>Lively balance</span>' : '<span class="ok">✓ Stable balance</span>';
     this.tyInfo.innerHTML = `<span>Grip F ${fmt(spec.frictionSlipFront / this.base.frictionSlipFront * 100)}% · R ${fmt(spec.frictionSlipRear / this.base.frictionSlipRear * 100)}%</span>` +
@@ -192,6 +241,7 @@ export class Garage {
     $('g-tq-rpm').textContent = `@ ${fmt(e.peakTorqueRpm)} rpm`;
     $('g-pw').textContent = fmt(e.peakHp / spec.mass * 1000);
     const changed = JSON.stringify(b) !== JSON.stringify(this.applied);
+    $('g-stock').disabled = JSON.stringify(b) === JSON.stringify(sanitize(this.stock, this.stock));
     $('g-apply').textContent = changed ? 'APPLY & DRIVE' : 'DRIVE';
     this.results(null);
     if (!this.running) this.drawDyno();
@@ -247,7 +297,7 @@ export class Garage {
     };
     const upTo = sweepRpm == null ? Infinity : sweepRpm;
     // stock reference (dashed)
-    if (JSON.stringify(this.b) !== JSON.stringify(sanitize(STOCK))) {
+    if (JSON.stringify(this.b) !== JSON.stringify(sanitize(this.stock, this.stock))) {
       plot(st, (r, t) => t, 'rgba(255,140,40,0.35)', 1.5, [4, 4], Infinity);
       plot(st, hpAt, 'rgba(80,200,255,0.35)', 1.5, [4, 4], Infinity);
     }
@@ -308,16 +358,20 @@ export class Garage {
     if (r === 'pending') { el.innerHTML = '<div class="g-pending">Dyno pull in progress…</div>'; return; }
     if (!r) { el.innerHTML = '<div class="g-pending">Tap <b>RUN SIMULATION</b> for a dyno pull and a drag-strip run.</div>'; return; }
     const cell = (k, v) => `<div><small>${k}</small><b>${v}</b></div>`;
-    el.innerHTML = cell('0–100 km/h', r.t100 ? `${fmt(r.t100, 2)} s` : '—') +
+    const f = r.failure;
+    const fail = f ? `<div class="g-fail">${f.what === 'engine'
+      ? `💥 ENGINE BLEW at ${fmt(f.t, 1)} s (${{ pressure: 'too much cylinder pressure for the block', heat: 'held on the rev limiter', overrev: 'over-revved', '': '' }[f.cause] || 'detonation'})`
+      : `⚙ TRANSMISSION SHREDDED at ${fmt(f.t, 2)} s — launch torque beyond its rating`}</div>` : '';
+    el.innerHTML = fail + cell('0–100 km/h', r.t100 ? `${fmt(r.t100, 2)} s` : '—') +
       cell('0–200 km/h', r.t200 ? `${fmt(r.t200, 1)} s` : '—') +
       cell('¼ mile', r.quarter ? `${fmt(r.quarter.t, 2)} s` : '—') +
       cell('Trap speed', r.quarter ? `${fmt(r.quarter.kmh)} km/h` : '—') +
-      cell('Top speed', `${fmt(r.top)} km/h`) +
+      cell('Top speed', `${fmt(Math.max(topSpeed(this.spec), r.top))} km/h`) +
       cell('Weight', `${fmt(this.spec.mass)} kg`);
   }
 
   apply() {
-    const b = sanitize(this.b);
+    const b = sanitize(this.b, this.stock);
     const changed = JSON.stringify(b) !== JSON.stringify(this.applied);
     this.onApply(b, changed);
   }

@@ -107,7 +107,7 @@ export class HUD {
     const sp = Math.abs(t.speed) * (this.units === 'mph' ? 2.23694 : 3.6);
     this.speedEl.textContent = Math.round(sp);
     this.unitEl.textContent = this.units === 'mph' ? 'MPH' : 'KM/H';
-    const gear = t.gear === -1 ? 'R' : t.gear === 0 ? 'N' : t.autoDrive ? `D${t.gear}` : String(t.gear);
+    const gear = t.broken ? '✕' : t.gear === -1 ? 'R' : t.gear === 0 ? 'N' : t.autoDrive ? `D${t.gear}` : String(t.gear);
     if (this.gearEl.textContent !== gear) this.gearEl.textContent = gear;
 
     // Shift lights: from 1,500 rpm below the redline, flashing at the redline
@@ -128,6 +128,24 @@ export class HUD {
       this.toastTimer -= t.dt;
       if (this.toastTimer <= 0) this.toastEl.classList.remove('show');
     }
+  }
+
+  /** Engine / gearbox health gauge: shows itself once anything is under strain (1 = at the limit). */
+  health(eng, trans, blown, broken) {
+    if (!this.healthEl) {
+      this.healthEl = document.getElementById('health');
+      this.hEng = this.healthEl.querySelector('.h-eng i');
+      this.hTr = this.healthEl.querySelector('.h-tr i');
+    }
+    const show = blown || broken || eng > 0.75 || trans > 0.75;
+    this.healthEl.classList.toggle('show', show);
+    if (!show) return;
+    const set = (el, x, dead) => {
+      el.style.width = `${Math.min(100, x * 100).toFixed(0)}%`;
+      el.parentNode.className = `${el.parentNode.className.split(' ')[0]} ${dead ? 'dead' : x > 1 ? 'bad' : x > 0.85 ? 'edge' : ''}`;
+    };
+    set(this.hEng, eng, blown);
+    set(this.hTr, trans, broken);
   }
 
   toast(msg, secs = 2) {

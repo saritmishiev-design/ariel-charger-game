@@ -65,13 +65,36 @@ export class Drivetrain {
     this.clutchSlipping = false;
     this.shiftTimer = 0;
     this.events = [];
+    this.repair();
+  }
+
+  /** Fresh engine and gearbox (a new run). */
+  repair() {
+    this.blown = false;        // engine destroyed: no restart this run
+    this.blowCause = '';
+    this.transBroken = false;  // gearbox shredded: no drive, the engine revs freely
+    this.engineDamage = 0;     // 0..1 (blows at 1)
+    this.transDamage = 0;
+    this.heat = 0;             // seconds held at/over the redline (cools when below)
+    this.transLoad = 0;        // filtered torque through the gearbox (Nm)
+    this.stress = { engine: 0, heat: 0, trans: 0 };
+  }
+
+  blow(cause) {
+    if (this.blown) return;
+    this.blown = true;
+    this.blowCause = cause;
+    this.running = false;
+    this.limiterCut = false;
+    this.starterTime = 0;
+    this.events.push('blown');
   }
 
   get rpm() { return this.engineW * RAD2RPM; }
 
   ratio(g = this.gear) {
     const s = this.spec;
-    if (g === 0) return 0;
+    if (g === 0 || this.transBroken) return 0;
     if (g === -1) return -s.reverse * s.finalDrive;
     return s.gears[g - 1] * s.finalDrive;
   }
@@ -116,6 +139,7 @@ export class Drivetrain {
   }
 
   start() {
+    if (this.blown) { this.events.push('blownStart'); return 'blown'; }
     if (this.running || this.starterTime > 0) return 'busy';
     if (this.gear !== 0 && this.pedalEngagement() > 0.3 && !this.autoClutch) return 'clutch';
     this.starterTime = 0.75;
@@ -125,6 +149,7 @@ export class Drivetrain {
 
   // Returns true if the gear engaged, false if it ground.
   requestGear(g, speed) {
+    if (this.transBroken) { this.events.push('noGears'); return false; }
     if (g === this.gear) return true;
     if (g === 0) {
       this.gear = 0;
@@ -141,7 +166,7 @@ export class Drivetrain {
       // The controller refuses reverse while rolling forward (and vice versa).
       if ((g === -1 && speed > 1.5) || (g > 0 && speed < -1.5)) { this.events.push('denied'); return false; }
       const up = g > this.gear;
-      if (this.gear > 0 && g > 0) this.shiftTimer = this.spec.shiftTime || 0.1;
+      if (this.gear > 0 && g > 0) this.shiftTimer = this.spec.shiftTime ?? 0.1;   // Lenco: 0, no cut at all
       this.gear = g;
       this.events.push(up ? 'shiftUp' : 'shiftDown');
       return true;
@@ -301,7 +326,7 @@ export class Drivetrain {
     const nosMul = 1 + 0.55 * this.nitrousAmt;
     const h = dt / SUBSTEPS;
     let Fsum = 0, loadSum = 0, slipSum = 0, Tsum = 0;
-    let slipping = false;
+    let slipping = false, engStress = 0, comb = 0, demand = 0;
 
     for (let i = 0; i < SUBSTEPS; i++) {
       const rpm = this.engineW * RAD2RPM;
@@ -320,9 +345,29 @@ export class Drivetrain {
         if (this.sequential && this.shiftTimer > 0) thr = 0;                    // ignition cut mid-shift
         // Turbo lag: only the spooled fraction of the steady-state boost is available
         let lag = 1;
-        if (s.boostCurve) { const pr = this.boostPR(rpm); lag = Math.pow((1 + (pr - 1) * this.spool) / pr, 0.85); }
-        Te = this.fullTorque(rpm) * lag * thr * nosMul - this.friction(rpm) * (1 - thr);
+        if (s.boostCurve) {
+          const pr = this.boostPR(rpm);
+          // Anti-lag (race tiers): on the two-step and through the launch the turbos are kept lit,
+          // so full boost is there the moment the clutch bites
+          const al = s.antiLag && (this.launchArmed || launching) ? s.antiLag : 0;
+          const prA = Math.max(pr, 1 + (this.boostPR(s.redlineRpm * 0.85) - 1) * al);
+          lag = Math.pow((1 + (prA - 1) * Math.max(this.spool, al)) / pr, 0.85);
+        }
+        comb = this.fullTorque(rpm) * lag * thr;
+        // What the driver's foot asks for (before traction control and the limiter trim it)
+        demand = this.launchArmed ? 0 : this.fullTorque(rpm) * lag * this.throttleInput;
+        Te = comb * nosMul - this.friction(rpm) * (1 - thr);
         load = thr;
+        // Cylinder pressure past what the block is built for: damage builds fast and the
+        // engine lets go (the nitrous kit comes with its own fuel and timing: not counted)
+        if (s.blockTorque) {
+          const r = comb / s.blockTorque;
+          engStress = Math.max(engStress, r);
+          if (r > 1) this.engineDamage += h * (r - 1) * 2.5;
+        }
+        // Detonation: far more boost than the fuel and compression can take — the ECU can pull
+        // timing only so far before the pistons start to melt
+        if (s.detonation) this.engineDamage += h * s.detonation * 0.3 * thr * (s.boostCurve ? this.spool : 1);
       } else {
         Te = -this.friction(rpm) - (rpm > 1 ? 25 : 0);
         if (this.starterTime > 0) Te += rpm < 260 ? 150 : 40;
@@ -339,17 +384,27 @@ export class Drivetrain {
         const w0 = (Iw * this.wheelW + Ie * G * this.engineW) / Ic;
         const w1 = w0 + h * (Te * G * eff - r * tyre.F) / (Ic + h * r * tyre.D);
         const Tc = Te - Ie * (w1 * G - this.engineW) / h;
+        let Tbox;
         if (Math.abs(Tc) <= Tcap) {
           locked = true;
           this.wheelW = w1;
           this.engineW = w1 * G;
+          Tbox = Math.abs(Tc);
         } else {
           slipping = true;
           const slipDir = Math.sign(this.engineW - this.wheelW * G) || Math.sign(Tc);
           const Tcl = slipDir * Tcap;
           this.engineW += h * (Te - Tcl) / Ie;
           this.wheelW += h * (Tcl * G * eff - r * tyre.F) / (Iw + h * r * tyre.D);
+          Tbox = Tcap;
         }
+        // Torque through the gearbox (40 ms average, so a single-step spike doesn't count):
+        // past its rating the gears are damaged, far past it they shear outright
+        // The engine's full torque slams through the gears as the clutch bites, whether or not the
+        // tyres can use it (a clutch grabs long before it is fully home): that launch shock is what
+        // breaks a street box behind a huge engine
+        Tbox = Math.max(Tbox, demand * nosMul * Math.min(1, engage * 3));
+        this.transLoad += (Tbox - this.transLoad) * Math.min(1, h / 0.04);
       }
 
       // Rear drum brakes (Coulomb friction on the axle)
@@ -364,6 +419,17 @@ export class Drivetrain {
       if (this.engineW < 0) {
         this.engineW = 0;
         if (locked && G !== 0) this.wheelW = 0;
+      }
+
+      if (G === 0 || Tcap < 1) this.transLoad *= Math.max(0, 1 - h / 0.04);
+      if (s.transRating && !this.transBroken) {
+        const tr = this.transLoad / s.transRating;
+        if (tr > 1) this.transDamage += h * (tr - 1) * 5;
+        if (this.transDamage >= 1 || tr > 1.5) {
+          this.transBroken = true;
+          this.transLoad = 0;
+          this.events.push('transBroken');
+        }
       }
 
       if (this.running && this.engineW * RAD2RPM < s.stallRpm) {
@@ -391,6 +457,22 @@ export class Drivetrain {
         }
       }
     }
+
+    // Engine limits: block strength, time on the limiter, mechanical over-rev (a missed shift)
+    if (this.running) {
+      const rpmNow = this.rpm;
+      // Heat builds only while bouncing off the rev limiter (or beyond it)
+      // (not in top gear: running out of revs at top speed is the car's speed limit, not abuse)
+      if ((this.cutAmount > 0.2 || rpmNow > s.limiterRpm) && this.gear !== 5) this.heat += dt;
+      else this.heat = Math.max(0, this.heat - dt);
+      if (this.engineDamage >= 1) this.blow('pressure');
+      else if (s.limiterHeat && this.heat > s.limiterHeat) this.blow('heat');
+      else if (rpmNow > s.limiterRpm * 1.25) this.blow('overrev');
+    }
+    const st = this.stress;
+    st.engine = Math.max(engStress, st.engine - dt * 1.5);
+    st.heat = s.limiterHeat ? this.heat / s.limiterHeat : 0;
+    st.trans = s.transRating ? this.transLoad / s.transRating : 0;
 
     this.clutchSlipping = slipping;
     this.force = Fsum / SUBSTEPS;

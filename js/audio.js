@@ -407,6 +407,23 @@ export class AudioEngine {
     AudioEngine.cleanup(src, [src, f, chop, lfo, depth, env]);
   }
 
+  /** A rod through the block: deep boom, metallic crack, then clattering debris. */
+  engineBlow() {
+    if (!this.ready) return;
+    this.burst(1.4, { freq: 140, gain: 1.0, q: 0.7, attack: 0.004 });
+    this.burst(0.35, { type: 'bandpass', freq: 2200, q: 1.5, gain: 0.6, attack: 0.002 });
+    this.burst(0.9, { type: 'highpass', freq: 900, q: 0.6, gain: 0.25, attack: 0.01, rate: 0.5 });
+    for (let i = 1; i <= 5; i++) setTimeout(() => this.burst(0.08, { type: 'bandpass', freq: 2600 + Math.random() * 2500, q: 8, gain: 0.25 }), 120 + i * 90 + Math.random() * 60);
+  }
+
+  /** Gears letting go: a sharp bang and a grinding scream. */
+  transBreak() {
+    if (!this.ready) return;
+    this.burst(0.3, { type: 'bandpass', freq: 700, q: 1.2, gain: 0.9, attack: 0.002 });
+    this.burst(0.15, { type: 'bandpass', freq: 3400, q: 3, gain: 0.5, attack: 0.001 });
+    setTimeout(() => this.grind(), 60);
+  }
+
   shift(up) {
     if (!this.ready) return;
     // Hurst-style mechanical clunk: thud + metallic click

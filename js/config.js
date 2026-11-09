@@ -63,7 +63,7 @@ export const SPEC = {
   wheelieTorque: 30000,      // N·m nose-up on an all-out launch (see vehicle.js)     // N·m on the rear axle: locks the rears at any speed
 
   // Aero / resistance
-  dragCoefficient: 0.46,
+  dragCoefficient: 0.466,     // (tuned so the stock car tops out at 316 km/h)
   frontalArea: 2.15,
   rollingResistance: 0.013,
 
@@ -75,7 +75,7 @@ export const SPEC = {
 export const PHYSICS_DT = 1 / 120;
 
 // Shown in the menu so it's easy to confirm which version a phone is running (sw.js VERSION matches).
-export const BUILD = 13;
+export const BUILD = 14;
 
 // Car body vs barriers: frictionless and barely bouncy, so the car glances off and slides along
 // the wall instead of snagging, spinning round or stopping dead.

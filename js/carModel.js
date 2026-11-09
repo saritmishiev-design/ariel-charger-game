@@ -3,7 +3,7 @@
 import * as THREE from '../vendor/three.module.min.js';
 import { rng, flakeNormalMap, contactShadowTexture } from './textures.js';
 import { mergeByMaterial } from './merge.js';
-import { extrudeProfile, buildGTR, buildSentra } from './bodies.js';
+import { extrudeProfile, buildGTR, buildSentra, grilleTexture } from './bodies.js';
 
 // Wheel styles: spokes on the rim face, materials, centre cap and (optional) brake calipers
 const UP = new THREE.Vector3(0, 1, 0);
@@ -81,7 +81,10 @@ function buildCharger(c) {
   }
 
   // ---- Front end
-  add(new THREE.BoxGeometry(1.62, 0.3, 0.06), black, 0, Y(0.62), zF - 0.02);
+  // Egg-crate grille (chrome bars over black), quad lamps in chrome bezels
+  const eggCrate = new THREE.MeshStandardMaterial({ map: grilleTexture('bars', '#c9ccd1'), metalness: 0.9, roughness: 0.25, envMap: c.envMap });
+  eggCrate.map.repeat.set(6, 1);
+  add(new THREE.BoxGeometry(1.62, 0.3, 0.06), eggCrate, 0, Y(0.62), zF - 0.02);
   for (let i = 0; i < 7; i++) add(new THREE.BoxGeometry(1.6, 0.012, 0.02), chrome, 0, Y(0.5 + i * 0.04), zF - 0.05, false);
   add(new THREE.BoxGeometry(1.7, 0.03, 0.05), chrome, 0, Y(0.785), zF - 0.03, false);
   for (const s of [-1, 1]) for (const k of [0.56, 0.78]) {
@@ -166,6 +169,14 @@ export class CarModel {
     };
     const built = (BODIES[spec.model] || buildCharger)(ctx);
     const rim = built.rim || CHARGER_RIM;
+
+    // Wheel wells: a dark open tube in each arch, so you never see body colour (or daylight) round the tyres
+    const wellMat = new THREE.MeshStandardMaterial({ color: 0x070708, roughness: 0.95, side: THREE.DoubleSide });
+    const archR = built.arch || 0.44;
+    for (const z of [zf, zr]) {
+      const well = add(new THREE.CylinderGeometry(archR - 0.012, archR - 0.012, spec.width - 0.06, 24, 1, true), wellMat, 0, Y(spec.wheelRadius), z, false);
+      well.rotation.z = Math.PI / 2;
+    }
 
     // Underbody shadow plane & chassis
     add(new THREE.BoxGeometry(spec.width - 0.2, 0.08, spec.length - 1.1), black, 0, Y(0.25), (zF + zR) / 2, false);

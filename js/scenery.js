@@ -300,13 +300,13 @@ export function buildMountains(group, rand, bounds = { cx: 0, cz: -280, R: 900 }
  *    (hairpins / chicane, radius < 50 m), just off the outside of the bend, facing the approach.
  *  - "Love, your wife Sarit" stands beside the fast, normal sections (straights and fast sweepers).
  */
-export function buildBillboards(track, group) {
+export function buildBillboards(track, group, info) {
   // Big enough to read at speed on a phone: 44 m × 22 m face, bottom edge 2.5 m up (clear of the 0.9 m walls)
   const W = 44, H = W / BILLBOARD_ASPECT, POST = 2.5, HEART = 7;
   const frame = new THREE.MeshStandardMaterial({ color: 0x2a2c31, metalness: 0.7, roughness: 0.45 });
   const backMat = new THREE.MeshStandardMaterial({ color: 0x8a8d93, metalness: 0.5, roughness: 0.6 });
   const saritTex = billboardTexture('sarit');
-  const sentraTex = billboardTexture('sentra');
+  const sentraTex = billboardTexture('sentra', info);
   const mats = {
     sarit: new THREE.MeshStandardMaterial({
       map: saritTex, emissiveMap: saritTex, emissive: 0xffffff, emissiveIntensity: 0.45, roughness: 0.55, metalness: 0,
