@@ -21,6 +21,20 @@ Nissan GT-R and a 2023 Nissan Sentra, three tracks and a pre-race tuning garage.
   cold bite), line pressure and front/rear bias. Brakes heat up with every stop and fade past the compound's
   limit (HUD gauge); wheels are capped at tyre grip (ABS on the modern cars; the Charger's lock and slide).
   The garage shows 100–0 / 200–0 km/h stopping distances from the car's weight, speed and setup.
+- **Engine swaps:** any engine in any body. The swap library has every car's factory engine (Hemi, VR38, MR20,
+  M177), a 13B twin-rotor, 26B four-rotor, six-rotor monster, F1 V10 (19,000 rpm), quad-turbo V16, V24, an
+  R-2800 radial, a single-cylinder thumper, the 3,000 hp Pro Mod and an 11,000 hp nitromethane Top Fuel Hemi —
+  plus your own saved engines. Swapping keeps the gearbox and tyres and re-gears the final drive for the new rev range.
+- **Modular engines:** piston (1–24 cylinders, inline / V / boxer), Wankel rotary (1–6 rotors: weak low down, huge
+  revs) and radial (3–28 cylinders: enormous low-rpm torque, ~2,700 rpm). Fuels: gasoline, E85, methanol and
+  nitromethane (≈4× the energy, instant throttle, and it eats an engine in ~20 s of full throttle). Tiers add
+  **F1** (pneumatic valves, 20,000 rpm, peaky) and **Top Fuel**. Launch-control rpm and clutch take-up follow each
+  engine's torque band; the dyno and tach scale to 20,000 rpm.
+- **Engines that don't fit show it:** blowers burst through the bonnet (on nitro a 14-71 with a butterfly injector
+  hat), zoomie headers poke out of the wings (and spit flame), velocity stacks or turbos stick up, and a radial sits
+  where the grille was.
+- **Engine voices:** the synth follows cylinder/rotor count and firing — a Wankel "brap", a 16–24-cylinder smooth
+  turbine hum, the F1 scream, the radial's slow thump, and Top Fuel's rough idle and violent crackle.
 - **Engine builder for every car** (🔧 in the garage): bore, stroke, compression, cylinders, layout, induction and
   boost (to 60 psi), gearbox and ratios, tyres — plus **build tiers** (Stock block / Forged / Race / Pro Mod billet:
   block strength, breathing, knock limit, rev ceiling, anti-lag) and quick builds up to a **3,000+ hp Pro Mod swap**.

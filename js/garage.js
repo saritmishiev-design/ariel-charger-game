@@ -2,25 +2,38 @@
 // the full drivetrain on a simulated drag strip. Everything comes from build.js, the same model
 // the driving physics uses.
 import {
-  STOCK, LIMITS, CYLINDERS, LAYOUTS, INDUCTION, TRANS, TIERS, layoutAllows, sanitize, engineModel,
+  STOCK, LIMITS, LAYOUTS, INDUCTION, TRANS, TIERS, FUELS, ENGINE_TYPES, RADIAL_CYL, layoutAllows, sanitize, engineModel,
   deriveSpec, shiftSpeeds, balance, dragRun, topSpeed,
 } from './build.js';
+import { CARS } from './cars.js';
 
 const $ = (id) => document.getElementById(id);
 const fmt = (x, d = 0) => x.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 const GEAR_NAMES = ['1st', '2nd', '3rd', '4th', '5th'];
 
-// One-tap builds. The Pro Mod swap is the same for every car: a 9.1 L billet V8 on two huge turbos,
-// a Lenco and fat rear (or, on the front-drive Sentra, front) tyres — over 3,000 hp.
-const PRESETS = {
-  street: (stock) => ({ ...stock, tier: 'forged', induction: 'turbo', boost: Math.max(stock.boost, 18), cr: Math.min(stock.cr, 9.3) }),
-  race: (stock) => ({ ...stock, tier: 'race', induction: 'turbo', boost: 30, cr: Math.min(stock.cr, 9.5), trans: 'drag', gears: TRANS.drag.gears.slice(), final: 3.4 }),
-  promod: (stock, fwd) => ({
-    ...stock, tq: 1, knockCR: 0, bore: 115, stroke: 110, cr: 8.5, cyl: 8, layout: 'V', induction: 'turbo', boost: 56, tier: 'promod',
-    trans: 'lenco', gears: TRANS.lenco.gears.slice(), final: 2.9,
-    tireFront: fwd ? 355 : 225, tireRear: fwd ? 225 : 355, tireDia: 30,
-  }),
-};
+// ---------------------------------------------------------------- engine swap library
+// Everything that makes up an engine (as opposed to the chassis: gearbox, tyres). Swapping copies
+// only these, so any engine drops into any body; the drag engines also bring a Lenco.
+export const ENGINE_FIELDS = ['engine', 'bore', 'stroke', 'cr', 'cyl', 'layout', 'rotors', 'rotorCc', 'induction', 'boost',
+  'tier', 'fuel', 'knockCR', 'tq', 'spool', 'voice'];
+const LENCO = { trans: 'lenco', gears: TRANS.lenco.gears.slice() };
+const BASE_ENGINE = { tq: 1, knockCR: 0, spool: 0, voice: null, fuel: 'gas', tier: 'stock', engine: 'piston', rotors: 2, rotorCc: 654 };
+const engineOf = (b) => Object.fromEntries(ENGINE_FIELDS.map(k => [k, b[k]]));
+export const ENGINE_LIBRARY = [
+  ...Object.entries(CARS).map(([id, c]) => ({ id, name: { charger: 'Blown Hemi V8', gtr: 'VR38 V6 twin-turbo', sentra: 'MR20 inline-4', amg: 'M177 V8 biturbo' }[id], sub: c.short, engine: engineOf(c.build) })),
+  { id: 'rx', name: '13B twin-rotor', sub: 'Wankel turbo', engine: { ...BASE_ENGINE, engine: 'rotary', rotors: 2, rotorCc: 654, cr: 9.4, induction: 'turbo', boost: 12, tier: 'forged' } },
+  { id: 'r26', name: '26B four-rotor', sub: 'Le Mans rotary', engine: { ...BASE_ENGINE, engine: 'rotary', rotors: 4, rotorCc: 654, cr: 10.5, induction: 'na', tier: 'race', fuel: 'e85' } },
+  { id: 'r6', name: 'Six-rotor monster', sub: 'Wankel, 2 turbos', engine: { ...BASE_ENGINE, engine: 'rotary', rotors: 6, rotorCc: 700, cr: 8.5, induction: 'turbo', boost: 28, tier: 'promod', fuel: 'methanol' } },
+  { id: 'f1', name: 'F1 V10', sub: '3.0 L · 19,000 rpm', engine: { ...BASE_ENGINE, cyl: 10, layout: 'V', bore: 98, stroke: 39.7, cr: 13.5, induction: 'na', tier: 'f1' } },
+  { id: 'v16', name: 'Quad-turbo V16', sub: 'hypercar', engine: { ...BASE_ENGINE, cyl: 16, layout: 'V', bore: 86, stroke: 86, cr: 9.0, induction: 'turbo', boost: 24, tier: 'race' } },
+  { id: 'v24', name: 'V24 "turbine"', sub: '13.7 L', engine: { ...BASE_ENGINE, cyl: 24, layout: 'V', bore: 90, stroke: 90, cr: 10.5, induction: 'na', tier: 'forged' } },
+  { id: 'radial', name: 'R-2800 radial', sub: '18-cyl aero, 46 L', engine: { ...BASE_ENGINE, engine: 'radial', cyl: 18, bore: 146, stroke: 152, cr: 6.7, induction: 'sc', boost: 12, tier: 'forged' } },
+  { id: 'thumper', name: 'Single-cylinder', sub: 'thumper', engine: { ...BASE_ENGINE, cyl: 1, layout: 'I', bore: 100, stroke: 90, cr: 11, induction: 'na' } },
+  { id: 'promod', name: '3,000 HP Pro Mod', sub: '9.1 L V8 turbo', engine: { ...BASE_ENGINE, cyl: 8, layout: 'V', bore: 115, stroke: 110, cr: 8.5, induction: 'turbo', boost: 56, tier: 'promod' }, drive: { ...LENCO, final: 2.9, tireDia: 30 } },
+  { id: 'topfuel', name: 'Top Fuel Hemi', sub: 'nitromethane, 11,000 hp', engine: { ...BASE_ENGINE, cyl: 8, layout: 'V', bore: 106.4, stroke: 114.3, cr: 6.5, induction: 'sc', boost: 58, tier: 'topfuel', fuel: 'nitro', voice: 'topfuel' }, drive: { ...LENCO, final: 3.2, tireDia: 30 } },
+];
+
+const loadSaved = () => { try { return JSON.parse(localStorage.getItem('charger.engines') || '[]').slice(0, 12); } catch (e) { return []; } };
 
 export class Garage {
   constructor({ onApply, onClose }) {
@@ -110,33 +123,43 @@ export class Garage {
   buildUi() {
     this.controls = [];
     const left = this.el.querySelector('.g-left');
-    // Presets and build tier
-    const pre = this.card(left, 'QUICK BUILDS', 'tap one, then fine-tune below');
-    const pr = document.createElement('div');
-    pr.className = 'seg g-seg g-presets';
-    for (const [k, label] of [['factory', 'Factory'], ['street', 'Street 1k'], ['race', 'Race'], ['promod', '⚡ 3,000 HP']]) {
-      const btn = document.createElement('button');
-      btn.type = 'button'; btn.textContent = label;
-      btn.addEventListener('click', () => {
-        this.b = sanitize(k === 'factory' ? this.stock : PRESETS[k](this.stock, this.fwd), this.stock);
-        this.syncControls(); this.refresh();
-      });
-      pr.appendChild(btn);
-    }
-    pre.appendChild(pr);
+    // Engine swap: any engine (factory engines of every car, exotic archetypes, your saved builds) into this body
+    const swap = this.card(left, 'ENGINE SWAP', 'drop any engine into this body — gearbox and tyres stay');
+    this.swapGrid = document.createElement('div');
+    this.swapGrid.className = 'g-swaps';
+    swap.appendChild(this.swapGrid);
+    const save = document.createElement('button');
+    save.type = 'button'; save.className = 'ghost g-save'; save.textContent = '💾 SAVE THIS ENGINE TO THE LIBRARY';
+    save.addEventListener('click', () => {
+      const e = this.engine, list = loadSaved();
+      list.unshift({ name: `${e.name} ${Math.round(e.peakHp).toLocaleString('en-US')} hp`, sub: `${fmt(e.dispL, 1)} L · ${FUELS[this.b.fuel].short}`, engine: engineOf(this.b) });
+      try { localStorage.setItem('charger.engines', JSON.stringify(list.slice(0, 12))); } catch (err) { /* private mode */ }
+      this.buildSwaps();
+    });
+    swap.appendChild(save);
+    this.buildSwaps();
     const tierCard = this.card(left, 'ENGINE BUILD', 'what the block, rods and pistons can take');
     this.seg(tierCard, 'tier', 'Tier', Object.entries(TIERS).map(([k, t]) => [k, t.short]));
     this.tierInfo = this.info(tierCard);
-    // Engine block
-    const eng = this.card(left, 'ENGINE BLOCK', 'bore × stroke × cylinders = displacement');
-    this.slider(eng, 'bore', 'Bore (piston width)', ' mm', 1);
-    this.slider(eng, 'stroke', 'Stroke (piston travel)', ' mm', 1);
-    this.slider(eng, 'cr', 'Compression ratio', ':1', 1);
-    this.cylSeg = this.seg(eng, 'cyl', 'Cylinders', CYLINDERS.map(c => [c, String(c)]), (c) => {
-      this.b.cyl = c;
-      if (!layoutAllows(this.b.layout, c)) this.b.layout = 'V';
+    // Engine block: piston (1-24 cylinders, inline / V / boxer), Wankel rotary or radial
+    const eng = this.card(left, 'ENGINE', 'type, size and layout');
+    this.seg(eng, 'engine', 'Type', Object.entries(ENGINE_TYPES), (v) => {
+      this.b.engine = v;
+      if (v === 'radial') { this.b.cyl = 9; this.b.bore = Math.max(this.b.bore, 130); this.b.stroke = Math.max(this.b.stroke, 140); this.b.cr = Math.min(this.b.cr, 7); }
+      if (v === 'piston' && this.b.layout === 'R') { this.b.layout = 'V'; this.b.cyl = 8; this.b.bore = Math.min(this.b.bore, 110); this.b.stroke = Math.min(this.b.stroke, 100); }
+    });
+    this.pistonRows = [
+      this.slider(eng, 'bore', 'Bore (piston width)', ' mm', 1),
+      this.slider(eng, 'stroke', 'Stroke (piston travel)', ' mm', 1),
+    ];
+    this.cylRow = this.slider(eng, 'cyl', 'Cylinders', '', 0, {
+      set: (v) => { this.b.cyl = v; if (!layoutAllows(this.b.layout, v)) this.b.layout = v % 2 || v < 2 ? 'I' : 'V'; this.syncControls(); },
     });
     this.laySeg = this.seg(eng, 'layout', 'Configuration', Object.entries(LAYOUTS));
+    this.radialSeg = this.seg(eng, 'cyl', 'Radial cylinders (rows of 3-9)', RADIAL_CYL.map(c => [c, String(c)]));
+    this.rotorSeg = this.seg(eng, 'rotors', 'Rotors', [1, 2, 3, 4, 5, 6].map(c => [c, String(c)]));
+    this.rotorRow = this.slider(eng, 'rotorCc', 'Chamber per rotor', ' cc', 0);
+    this.slider(eng, 'cr', 'Compression ratio', ':1', 1);
     this.engInfo = this.info(eng);
     // Induction
     const ind = this.card(left, 'FORCED INDUCTION');
@@ -145,6 +168,7 @@ export class Garage {
       if (v === 'turbo' && this.applied.induction !== 'turbo' && this.b.boost < 10) this.b.boost = 14;
     });
     this.boostRow = this.slider(ind, 'boost', 'Max boost', ' psi', 1);
+    this.seg(ind, 'fuel', 'Fuel', Object.entries(FUELS).map(([k, f]) => [k, f.short]));
     this.indInfo = this.info(ind);
     // Transmission
     const tr = this.card(left, 'TRANSMISSION');
@@ -189,10 +213,38 @@ export class Garage {
 
   syncControls() {
     for (const f of this.controls) f();
+    const t = this.b.engine, show = (el, on) => { (el.closest('.g-segrow') || el).style.display = on ? '' : 'none'; };
     // Layout/cylinder combinations that don't exist are greyed out
     this.laySeg.querySelectorAll('button').forEach(btn => { btn.disabled = !layoutAllows(btn.dataset.v, this.b.cyl); });
-    this.cylSeg.querySelectorAll('button').forEach(btn => { btn.disabled = !layoutAllows(this.b.layout, +btn.dataset.v); });
+    for (const r of this.pistonRows) show(r, t !== 'rotary');
+    show(this.cylRow, t === 'piston');
+    show(this.laySeg, t === 'piston');
+    show(this.radialSeg, t === 'radial');
+    show(this.rotorSeg, t === 'rotary');
+    show(this.rotorRow, t === 'rotary');
     this.boostRow.style.display = this.b.induction === 'na' ? 'none' : '';
+  }
+
+  buildSwaps() {
+    const g = this.swapGrid;
+    g.innerHTML = '';
+    const add = (item, saved = false) => {
+      const btn = document.createElement('button');
+      btn.type = 'button'; btn.className = `g-swap${saved ? ' saved' : ''}`;
+      btn.innerHTML = `<b>${item.name}</b><small>${item.sub || ''}</small>`;
+      btn.addEventListener('click', () => {
+        // Re-gear the final drive for the new engine's rev range (same road speed at the redline),
+        // otherwise an F1 engine would be stuck below its power band and a radial over-revved
+        const before = engineModel(this.b, this.stock).redline;
+        const next = sanitize({ ...this.b, ...item.engine, ...(item.drive || {}) }, this.stock);
+        if (!item.drive) next.final = Math.min(LIMITS.final[1], Math.max(LIMITS.final[0], Math.round(this.b.final * engineModel(next, this.stock).redline / before * 100) / 100));
+        this.b = next;
+        this.syncControls(); this.refresh();
+      });
+      g.appendChild(btn);
+    };
+    ENGINE_LIBRARY.forEach(it => add(it));
+    loadSaved().forEach(it => add(it, true));
   }
 
   // ------------------------------------------------------------------ live numbers
@@ -212,11 +264,12 @@ export class Garage {
     const sq = b.bore / b.stroke;
     const pistonMs = 2 * b.stroke / 1000 * e.redline / 60;
     this.engInfo.innerHTML =
-      `<span><b>${fmt(e.dispL, 2)} L</b> · ${fmt(e.ci)} ci</span>` +
-      `<span>${sq > 1.03 ? 'Over-square' : sq < 0.97 ? 'Under-square' : 'Square'} ${fmt(sq, 2)}</span>` +
+      `<span><b>${e.name}</b> · <b>${fmt(e.dispL, 2)} L</b>${b.engine === 'rotary' ? ' (piston-equivalent)' : ` · ${fmt(e.ci)} ci`}</span>` +
+      (b.engine === 'rotary' ? '<span>No valves: revs to the sky, weak low down</span>'
+        : `<span>${sq > 1.03 ? 'Over-square' : sq < 0.97 ? 'Under-square' : 'Square'} ${fmt(sq, 2)}</span><span>Piston speed ${fmt(pistonMs, 1)} m/s</span>`) +
       `<span>Redline <b>${fmt(e.redline)}</b> rpm</span>` +
-      `<span>Piston speed ${fmt(pistonMs, 1)} m/s</span>` +
-      `<span>Engine ${fmt(e.mass)} kg</span>`;
+      `<span>Engine ${fmt(e.mass)} kg</span>` +
+      (b.fuel === 'nitro' ? '<span class="warn">Nitromethane: ~20 s of full throttle per engine — RESET rebuilds it</span>' : '');
     const crEff = b.cr * Math.pow(1 + (b.induction === 'na' ? 0 : b.boost / 14.7), 1 / 1.3);
     this.indInfo.innerHTML = b.induction === 'na'
       ? '<span>No boost: crisp response, highest compression without knock.</span>'
@@ -269,7 +322,8 @@ export class Garage {
     // grid
     g.strokeStyle = 'rgba(255,255,255,0.08)'; g.lineWidth = 1;
     g.fillStyle = 'rgba(255,255,255,0.45)'; g.font = '9px system-ui, sans-serif';
-    for (let r = 0; r <= maxRpm; r += 1000) {
+    const xStep = maxRpm > 12000 ? 2000 : 1000;
+    for (let r = 0; r <= maxRpm; r += xStep) {
       g.beginPath(); g.moveTo(X(r), T); g.lineTo(X(r), T + PH); g.stroke();
       g.textAlign = 'center'; g.fillText(String(r / 1000), X(r), H - 8);
     }

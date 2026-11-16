@@ -198,6 +198,8 @@ function updateNos(dt, input) {
   nos.fx += ((nos.spraying ? 1 : 0) - nos.fx) * Math.min(1, dt * (nos.spraying ? 7 : 3));
   // Short flame spits on the limiter / overrun crackle
   if (d.limiterCut && Math.random() < 0.25) nos.spit = 0.55 + Math.random() * 0.3;
+  // Nitromethane: the headers spit flame under load, and on every lift
+  if (SPEC.fuel === 'nitro' && d.running && Math.random() < (d.load > 0.6 ? 0.35 : d.load < 0.05 && d.rpm > 2500 ? 0.2 : 0)) nos.spit = 0.6 + Math.random() * 0.5;
   nos.spit *= Math.max(0, 1 - dt * 14);
   car.flame = Math.max(nos.fx, nos.spit);
   if (nos.spraying && Math.random() < dt * 8) haptic(8);
@@ -576,7 +578,7 @@ function processEvents() {
       case 'shiftDown': audio.shift(false); break;
       case 'grind': audio.grind(); if (!settings.auto) hud.toast('GRIND! Use the clutch', 1.4); break;
       case 'limiter': haptic(12); break;
-      case 'launchArmed': haptic([15, 25, 15]); hud.toast('LAUNCH CONTROL · 3,500 RPM — release BRAKE to go!', 2.5); break;
+      case 'launchArmed': haptic([15, 25, 15]); hud.toast(`LAUNCH CONTROL · ${(SPEC.launchRpm || 3500).toLocaleString('en-US')} RPM — release BRAKE to go!`, 2.5); break;
       case 'launch': haptic(40); hud.toast('LAUNCH!', 0.9); break;
       case 'bov': audio.blowOff(vehicle.drivetrain.boostPsi / 15); break;
       case 'denied': haptic([20, 40, 20]); hud.toast('Stop the car to change direction', 1.4); break;
@@ -872,7 +874,12 @@ function prepareSpec() {
   const cs = carSpec(setup.car, setup.tunes[setup.car], builds[setup.car]);
   SPEC = cs.spec; ENGINE = cs.engine; CAR_BUILD = cs.build;
   SEQ = SPEC.transType !== 'manual';
-  audio.configure({ cyl: SPEC.cylinders, layout: SPEC.layout, blower: SPEC.blower, turbo: SPEC.turbo, profile: SPEC.audio });
+  // Rotary: one firing per rotor per shaft turn; rotaries and radials exhaust through one collector
+  const rot = SPEC.engineType === 'rotary', single = rot || SPEC.engineType === 'radial';
+  audio.configure({
+    cyl: rot ? SPEC.rotors : SPEC.cylinders, layout: single ? 'I' : SPEC.layout, cycle: rot ? 60 : 120,
+    blower: SPEC.blower, turbo: SPEC.turbo, profile: SPEC.audio,
+  });
 }
 
 /** Build the track, car, effects and HUD for the chosen setup (once per page load). */

@@ -33,7 +33,7 @@ export class AudioEngine {
   }
 
   sendEngineCfg() {
-    const c = { cyl: this.engineCfg.cyl, layout: this.engineCfg.layout, profile: this.engineCfg.profile };
+    const c = { cyl: this.engineCfg.cyl, layout: this.engineCfg.layout, profile: this.engineCfg.profile, cycle: this.engineCfg.cycle };
     if (this.engine && this.engine.port) this.engine.port.postMessage(c);
     else if (this.fallbackProc) this.fallbackProc.configure(c);
   }

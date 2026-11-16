@@ -32,6 +32,16 @@ const PROFILES = {
   // AMG M177: hot-V biturbo cross-plane V8 — no big-cam lope, but deep, long pipes, a heavy
   // bass body and plenty of pops and bangs on the overrun
   m177: { lope: 0.25, f1: [110, 0.018], f2: [290, 0.03], g1: 1.8, g2: 0.45, fc: [260, 1900, 0.22, 4200], pipes: [52, 82], comb: [250, 320], crackle: 0.16, spread: 0.3, gain: 0.9, body: 1.5 },
+  // Wankel: sharp, raspy exhaust-port pulses, one per rotor per shaft turn, and that lumpy "brap"
+  rotary: { lope: 1.3, f1: [260, 0.03], f2: [950, 0.06], g1: 1.0, g2: 0.7, fc: [700, 3200, 0.4, 8000], pipes: [140, 190], comb: [620, 780], crackle: 0.22, spread: 0.55, gain: 0.85, body: 0.6, noise: 1.8, tauK: 0.6 },
+  // Aero radial: big slow thumps through stub stacks
+  radial: { lope: 0.9, f1: [85, 0.03], f2: [230, 0.05], g1: 1.9, g2: 0.5, fc: [220, 1500, 0.3, 3500], pipes: [40, 61], comb: [180, 230], crackle: 0.08, spread: 0.6, gain: 0.85, body: 1.7, noise: 1.2, tauK: 1.3 },
+  // F1: tiny cylinders, open short pipes, a screaming high-pitched howl
+  f1: { lope: 0, f1: [700, 0.05], f2: [1900, 0.08], g1: 1.2, g2: 0.9, fc: [1500, 5000, 0.4, 12000], pipes: [260, 340], comb: [1200, 1500], crackle: 0.02, spread: 0.05, gain: 0.75, body: 0.3, noise: 0.5, tauK: 0.7 },
+  // Top Fuel: a rough, heavy, misfiring idle and open zoomie headers that crackle violently
+  topfuel: { lope: 1.7, f1: [120, 0.02], f2: [420, 0.04], g1: 1.6, g2: 0.6, fc: [500, 4000, 0.4, 9000], pipes: [80, 110], comb: [400, 480], crackle: 0.45, spread: 0.9, gain: 1.15, body: 1.3, noise: 2.2, tauK: 1.0 },
+  // 16-24 cylinders: the pulses run together into a smooth, continuous turbine-like hum
+  turbine: { lope: 0, f1: [200, 0.03], f2: [600, 0.05], g1: 1.2, g2: 0.5, fc: [400, 2600, 0.3, 6000], pipes: [90, 140], comb: [500, 620], crackle: 0.02, spread: 0.05, gain: 0.9, body: 1.0, noise: 0.4, tauK: 2.2 },
   mr20: { lope: 0, f1: [300, 0.03], f2: [820, 0.05], g1: 0.8, g2: 0.3, fc: [240, 900, 0.12, 2200], pipes: [120, 172], comb: [600, 720], crackle: 0, spread: 0.12, gain: 0.5, body: 0.5 },
 };
 
@@ -61,10 +71,11 @@ class V8Processor extends AudioWorkletProcessor {
     this.far = new Float32Array(1024);
     this.farPos = 0;
     // Per-cylinder personality: slightly different breathing & timing.
-    this.cylBase = Array.from({ length: 12 }, () => 0.72 + this.rand() * 0.56);
+    this.cylBase = Array.from({ length: 32 }, () => 0.72 + this.rand() * 0.56);
+    this.cycle = 120;
     this.cylGain = this.cylBase.slice();
     this.P = PROFILES.hemi;
-    this.cylTiming = Array.from({ length: 12 }, () => (this.rand() - 0.5) * 0.1);
+    this.cylTiming = Array.from({ length: 32 }, () => (this.rand() - 0.5) * 0.1);
     this.port.onmessage = (e) => this.configure(e.data);
     this.fireCount = 0;
     this.firePos = 0;              // in "firing intervals"
@@ -98,9 +109,10 @@ class V8Processor extends AudioWorkletProcessor {
   }
 
   /** Engine layout from the garage: { cyl, layout, profile }. */
-  configure({ cyl, layout, profile }) {
-    this.cyl = cyl || 8;
+  configure({ cyl, layout, profile, cycle }) {
+    this.cyl = Math.max(1, Math.min(32, cyl || 8));
     this.layout = layout || 'V';
+    this.cycle = cycle || 120;    // crank rpm × cylinders / cycle = firings per second (a rotary: 60)
     const P = this.P = PROFILES[profile] || PROFILES.hemi;
     this.dlLen = [Math.round(this.sr / (2 * P.pipes[0])), Math.round(this.sr / (2 * P.pipes[1]))];
     this.hlLen = [Math.round(this.sr / P.comb[0]), Math.round(this.sr / P.comb[1])];
@@ -123,7 +135,7 @@ class V8Processor extends AudioWorkletProcessor {
     const b = this.bank[cyl];
     const lope = Math.max(0, 1 - (rpm - 900) / 1800) * this.P.lope;   // big-cam idle lope
     let amp = this.cylGain[cyl] * (1 + (this.rand() - 0.5) * (0.12 + 0.55 * lope));
-    let noise = 0.25 + load * 0.9;
+    let noise = (0.25 + load * 0.9) * (this.P.noise || 1);
     let level = 0.42 + 0.58 * Math.pow(load, 0.75);
     const overrun = load < 0.06 && rpm > 2300;
 
@@ -155,9 +167,9 @@ class V8Processor extends AudioWorkletProcessor {
 
     // Pulse shapes scale with the firing interval (computed per block)
     // Wide, bass-heavy pulses that scale with the firing interval (computed per block)
-    const fps = this.cyl / 120;                                    // firings per crank rpm per second
+    const fps = this.cyl / this.cycle;                             // firings per crank rpm per second
     const interval = 1 / (Math.max(rpmT, 120) * fps);              // seconds between firings
-    const tauA0 = Math.min(0.0028, Math.max(0.0008, interval * 0.3));
+    const tauA0 = Math.min(0.0028, Math.max(0.0004, interval * 0.3 * (this.P.tauK || 1)));
     const dA = [0, 0], dB = [0, 0];
     for (let b = 0; b < 2; b++) {
       const tA = tauA0 * this.bankTau[b];

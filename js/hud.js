@@ -42,6 +42,7 @@ export class HUD {
   setRange(redline) {
     this.red = redline;
     this.maxRpm = Math.ceil((redline + 1200) / 1000) * 1000;
+    if (this.maxRpm > 12000) this.maxRpm = Math.ceil(this.maxRpm / 2000) * 2000;
     this.bg = null;
   }
 
@@ -65,9 +66,11 @@ export class HUD {
     g.strokeStyle = '#e0141e'; g.lineWidth = s * 0.05;
     g.beginPath(); g.arc(cx, cy, R * 0.86, this.angleFor(this.red), this.angleFor(this.maxRpm)); g.stroke();
     // ticks
-    const tick = this.maxRpm > 9000 ? 500 : 250;
+    // (F1 engines rev to 20,000: coarser ticks and a number every 2,000)
+    const tick = this.maxRpm > 12000 ? 1000 : this.maxRpm > 9000 ? 500 : 250;
+    const majorStep = this.maxRpm > 12000 ? 2000 : 1000;
     for (let r = 0; r <= this.maxRpm; r += tick) {
-      const a = this.angleFor(r), major = r % 1000 === 0;
+      const a = this.angleFor(r), major = r % majorStep === 0;
       const r0 = R * (major ? 0.74 : 0.8), r1 = R * 0.9;
       g.strokeStyle = r >= this.red ? '#ff4040' : '#e8e8e8';
       g.lineWidth = major ? 2.4 : 1;
@@ -114,7 +117,8 @@ export class HUD {
     const n = this.lights.length, red = this.red;
     const flash = t.rpm > red - 100 && (performance.now() % 160) < 80;
     this.lights.forEach((el, i) => {
-      const th = red - 1500 + i * (1400 / (n - 1));
+      const win = Math.max(1500, red * 0.2);
+      const th = red - win + i * ((win - 100) / (n - 1));
       el.className = t.rpm >= th ? (flash ? 'flash' : i < 2 ? 'g' : i < 4 ? 'y' : 'r') : '';
     });
 

@@ -219,6 +219,12 @@ export class Drivetrain {
     if (this.shiftTimer > 0) { this.shiftTimer -= dt; return 0; }
     if (this.gear === 0) return 0;
     const boxRpm = Math.abs(this.wheelW * this.ratio()) * RAD2RPM;
+    const lr = this.spec.launchRpm || LAUNCH_RPM;
+    if (lr > LAUNCH_RPM) {
+      // Peaky engines (F1, rotary): slip the clutch until the revs are up in the power band
+      if (boxRpm > lr * 0.85) return 1;
+      return clamp((this.rpm - lr * 0.75) / (lr * 0.25), 0, 1) * (this.throttle > 0.05 ? 1 : 0);
+    }
     if (boxRpm > 1500) return 1;
     // Slipping launch: engage as revs build
     return clamp((this.rpm - 950) / 1300, 0, 1) * (this.throttle > 0.05 ? 1 : 0.0);
@@ -266,9 +272,11 @@ export class Drivetrain {
       // ...and on revs: the clutch carries about what the engine makes at the launch rpm (more as
       // the revs rise), so a car with all-wheel-drive grip — no wheelspin to regulate — pulls hard
       // without bogging or hunting
-      const Tw = this.fullTorque(this.rpm) * clamp(1 + (this.rpm - 3000) / 700, 0.25, 2);
+      // (nothing below ~75 % of the launch rpm, so a peaky engine that sags can climb back up)
+      const lr = s.launchRpm || LAUNCH_RPM;
+      const Tw = this.fullTorque(this.rpm) * clamp((this.rpm - lr * 0.75) / (lr * 0.2), 0, 2);
       const revCap = Math.pow(clamp(Tw / s.clutchMaxTorque, 0, 1), 1 / 1.4);
-      this.launchClutch += (Math.max(0.15, Math.min(this.launchSlipCap, revCap)) - this.launchClutch) * Math.min(1, dt * 25);
+      this.launchClutch += (Math.max(0.02, Math.min(this.launchSlipCap, revCap)) - this.launchClutch) * Math.min(1, dt * 25);
       if (err > 0.05) this.launchFactor = Math.max(0.3, this.launchFactor - dt * 6 * Math.min(1, err / 0.3));
       else this.launchFactor = Math.min(1, this.launchFactor + dt * 2.5);
     } else this.launchFactor = 1;
@@ -319,7 +327,8 @@ export class Drivetrain {
     }
     // Throttle body response
     const target = this.throttleInput * (launching ? this.launchFactor : this.tcsFactor) * (1 - this.stabilityCut);
-    this.throttle += (target - this.throttle) * Math.min(1, dt / 0.045);
+    // Throttle body response: nitromethane engines answer almost instantly (and violently)
+    this.throttle += (target - this.throttle) * Math.min(1, dt / (s.throttleTau || 0.045));
 
     let engage = this.autoClutch ? this.autoEngagement(dt) : this.pedalEngagement();
     // Anti-stall after a hit: slip the clutch automatically so a sudden stop can't kill the engine
@@ -369,7 +378,7 @@ export class Drivetrain {
         else if (cutAmt < 0.1) this.limiterCut = false;
         this.cutAmount = cutAmt;
         thr *= 1 - cutAmt;
-        if (this.launchArmed) thr = clamp((LAUNCH_RPM - rpm) / 300, 0, 1);   // two-step
+        if (this.launchArmed) thr = clamp(((s.launchRpm || LAUNCH_RPM) - rpm) / 300, 0, 1);   // two-step
         if (this.sequential && this.shiftTimer > 0) thr = 0;                    // ignition cut mid-shift
         // Turbo lag: only the spooled fraction of the steady-state boost is available
         let lag = 1;
@@ -396,9 +405,13 @@ export class Drivetrain {
         // Detonation: far more boost than the fuel and compression can take — the ECU can pull
         // timing only so far before the pistons start to melt
         if (s.detonation) this.engineDamage += h * s.detonation * 0.3 * thr * (s.boostCurve ? this.spool : 1);
+        // Nitromethane: every second at full load costs a slice of the engine (a Top Fuel motor is
+        // rebuilt after every run)
+        if (s.fuelWear) this.engineDamage += h * s.fuelWear * thr * thr;
       } else {
         Te = -this.friction(rpm) - (rpm > 1 ? 25 : 0);
-        if (this.starterTime > 0) Te += rpm < 260 ? 150 : 40;
+        // (big engines get a big starter: a 46 L radial needs far more than a Hemi's)
+        if (this.starterTime > 0) Te += (rpm < 260 ? 150 : 40) * Math.max(1, (s.frictionScale || 1) * 1.3);
       }
 
       const tyre = this.tyre(this.wheelW, v, N, muDrive);

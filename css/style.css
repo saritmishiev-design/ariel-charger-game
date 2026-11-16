@@ -598,3 +598,14 @@ body.gas-slider .pedal.gas.down { transform: none; }
 body.free #progress { display: none; }
 #btn-tcs.tcs-0 { color: #ff6a5a; }
 #btn-tcs.tcs-3 { color: #5fe08a; }
+/* Engine swap library */
+.g-swaps { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; }
+.g-swap {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 7px 8px; text-align: left;
+  background: rgba(255, 255, 255, 0.04); border: 1px solid var(--line) !important; border-radius: 10px; color: var(--text);
+}
+.g-swap b { font-size: 11.5px; line-height: 1.15; }
+.g-swap small { font-size: 9px; color: var(--muted); }
+.g-swap:active { background: rgba(255, 122, 0, 0.2); }
+.g-swap.saved { border-color: rgba(51, 214, 255, 0.5) !important; }
+.g-save { width: 100%; margin-top: 8px; padding: 9px; border-radius: 10px; font-weight: 800; font-size: 11px; letter-spacing: 1px; }

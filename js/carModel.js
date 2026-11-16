@@ -66,14 +66,14 @@ function buildCharger(c) {
 
   // ---- Hood: power bulge, plus the 6-71 blower and scoop when the build has a supercharger
   add(new THREE.BoxGeometry(0.75, 0.05, 1.6), paint, 0, Y(0.92), -1.15);
-  if (spec.blower !== false) {
+  if (spec.blower !== false && !c.dressBlower) {
     add(new THREE.BoxGeometry(0.46, 0.2, 0.62), chrome, 0, Y(1.05), -1.0);
     for (let i = 0; i < 5; i++) add(new THREE.BoxGeometry(0.48, 0.018, 0.64), black, 0, Y(0.98 + i * 0.035), -1.0, false);
     const scoop = add(new THREE.BoxGeometry(0.42, 0.16, 0.5), black, 0, Y(1.23), -1.04);
     scoop.rotation.x = 0.06;
     add(new THREE.BoxGeometry(0.36, 0.1, 0.02), new THREE.MeshBasicMaterial({ color: 0x020202 }), 0, Y(1.24), -1.3, false);
     for (const s of [-1, 1]) add(new THREE.BoxGeometry(0.04, 0.13, 0.03), chrome, s * 0.1, Y(1.24), -1.3, false);
-  } else {
+  } else if (!c.dressBig) {
     // NA / turbo: a low shaker-style scoop on the bulge
     const sh = add(new THREE.BoxGeometry(0.5, 0.09, 0.55), black, 0, Y(1.0), -1.1);
     sh.rotation.x = 0.04;
@@ -115,6 +115,120 @@ function buildCharger(c) {
     mir.rotation.y = s * 0.2;
   }
   return { exhausts: [[-0.62, 0.25, zR + 0.1], [0.62, 0.25, zR + 0.1]] };
+}
+
+
+/**
+ * What the engine looks like from outside when it doesn't fit: a blower (and on nitro, a 14-71 with
+ * a butterfly injector hat) bursting through the bonnet, zoomie headers poking out of the wings,
+ * velocity stacks, turbos — or a whole radial engine where the grille was. Returns extra exhaust
+ * points (zoomie tips) for the flame effect: [x, groundHeight, z, tiltUp].
+ */
+function engineDress(c) {
+  const { add, Y, spec, zf, chrome, black, envMap } = c;
+  const bay = spec.bay || { L: 6, cyl: 8, hood: 0.9, u: 0 };
+  const z0 = zf + bay.u, hood = bay.hood;
+  const dispL = spec.dispL || 6, cyl = spec.cylinders || 8;
+  const nitro = spec.fuel === 'nitro', radial = spec.engineType === 'radial', rotary = spec.engineType === 'rotary';
+  const over = Math.max(dispL / bay.L, rotary ? 0 : cyl / bay.cyl);       // > 1: it doesn't fit
+  const alu = new THREE.MeshStandardMaterial({ color: 0xc4c8ce, metalness: 1, roughness: 0.28, envMap });
+  const heat = new THREE.MeshStandardMaterial({ color: 0x8c6f55, metalness: 1, roughness: 0.35, envMap });
+  const extraEx = [];
+  const out = { exhausts: extraEx, blower: false, big: false };
+
+  if (radial) {
+    // A radial engine where the grille was: finned cylinders round a crankcase, prop hub in front
+    const R = 0.42 * Math.cbrt(dispL / 46) + 0.16, n = Math.min(cyl, 14);
+    const cz = c.zF - 0.25, cy = Y(Math.max(0.62, R + 0.2));
+    const hub = add(new THREE.CylinderGeometry(R * 0.38, R * 0.42, 0.34, 20), black, 0, cy, cz);
+    hub.rotation.x = Math.PI / 2;
+    const nose = add(new THREE.ConeGeometry(R * 0.22, 0.28, 16), alu, 0, cy, cz - 0.3);
+    nose.rotation.x = -Math.PI / 2;
+    const rows = cyl > 9 ? 2 : 1;
+    for (let r = 0; r < rows; r++) for (let i = 0; i < n / rows; i++) {
+      const a = (i / (n / rows)) * Math.PI * 2 + r * Math.PI / (n / rows);
+      const g = new THREE.Group();
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.16, R * 0.16, R * 0.6, 10), black);
+      barrel.position.y = R * 0.6;
+      g.add(barrel);
+      for (let f = 0; f < 5; f++) {
+        const fin = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.22, R * 0.22, 0.012, 12), alu);
+        fin.position.y = R * 0.38 + f * R * 0.09;
+        g.add(fin);
+      }
+      const head = new THREE.Mesh(new THREE.BoxGeometry(R * 0.32, R * 0.16, R * 0.3), alu);
+      head.position.y = R * 0.98;
+      g.add(head);
+      g.position.set(0, cy, cz + r * 0.2);
+      g.rotation.z = a;
+      g.traverse(o => { if (o.isMesh) o.castShadow = true; });
+      c.body.add(g);
+    }
+    return out;
+  }
+
+  const big = nitro || over > 1.25;
+  out.big = big;
+  // Supercharger case through the bonnet (the Charger's own blower stays unless it's a monster)
+  if (spec.blower && (spec.model !== 'charger' || nitro || dispL > 8.6 || spec.boostPeak >= 22)) {
+    out.blower = true;
+    const k = Math.min(1.9, Math.max(0.85, Math.sqrt(dispL / 7) * (1 + (spec.boostPeak || 8) / 45)));
+    const w = 0.34 * k, l = 0.58 * k, h = 0.2 * k;
+    const base = Y(hood + 0.02);
+    add(new THREE.BoxGeometry(w * 1.2, 0.06, l * 1.05), black, 0, base, z0);                    // intake manifold
+    add(new THREE.BoxGeometry(w, h, l), chrome, 0, base + 0.03 + h / 2, z0);                    // rotor case
+    for (let i = 0; i < 6; i++) add(new THREE.BoxGeometry(w * 1.04, 0.015, l * 1.02), black, 0, base + 0.05 + i * h / 6, z0, false);
+    const front = add(new THREE.CylinderGeometry(0.09 * k, 0.09 * k, 0.05, 18), alu, 0, base + 0.03 + h * 0.4, z0 - l / 2 - 0.03);
+    front.rotation.x = Math.PI / 2;                                                            // drive pulley
+    const top = base + 0.03 + h;
+    if (nitro) {
+      // Injector hat with butterflies: an open box on top, throttle plates inside
+      const hw = w * 0.8, hl = l * 0.55, hh = 0.26 * k;
+      for (const s of [-1, 1]) {
+        add(new THREE.BoxGeometry(0.025, hh, hl), alu, s * hw / 2, top + hh / 2, z0);
+        add(new THREE.BoxGeometry(hw, hh, 0.025), alu, 0, top + hh / 2, z0 + s * hl / 2);
+      }
+      for (let i = 0; i < 3; i++) {
+        const bf = add(new THREE.BoxGeometry(hw * 0.9, 0.012, hl / 3.4), chrome, 0, top + hh * 0.7, z0 - hl / 3 + i * hl / 3, false);
+        bf.rotation.x = 0.55;
+        add(new THREE.CylinderGeometry(0.008, 0.008, hw, 6).rotateZ(Math.PI / 2), black, 0, top + hh * 0.7, z0 - hl / 3 + i * hl / 3, false);
+      }
+    } else {
+      const sc = add(new THREE.BoxGeometry(w * 0.85, 0.16 * k, l * 0.6), black, 0, top + 0.08 * k, z0);
+      sc.rotation.x = 0.05;
+      add(new THREE.BoxGeometry(w * 0.7, 0.09 * k, 0.02), new THREE.MeshBasicMaterial({ color: 0x020202 }), 0, top + 0.09 * k, z0 - l * 0.31, false);
+    }
+  } else if (big && !spec.turbo) {
+    // Velocity stacks through the bonnet: one trumpet per cylinder (up to 12)
+    const n = Math.min(cyl, 12), perRow = Math.ceil(n / 2);
+    for (let i = 0; i < n; i++) {
+      const s = i % 2 ? 1 : -1, row = Math.floor(i / 2);
+      const t = add(new THREE.CylinderGeometry(0.05, 0.035, 0.2, 14, 1, true), chrome, s * 0.1, Y(hood + 0.1), z0 - 0.35 + row * 0.7 / Math.max(1, perRow - 1));
+      t.material.side = THREE.DoubleSide;
+    }
+  } else if (big && spec.turbo) {
+    // Turbos sticking out of the bonnet
+    for (const s of [-1, 1]) {
+      const snail = add(new THREE.CylinderGeometry(0.15, 0.15, 0.12, 20), alu, s * 0.28, Y(hood + 0.12), z0);
+      snail.rotation.z = Math.PI / 2;
+      const inlet = add(new THREE.CylinderGeometry(0.08, 0.08, 0.16, 16, 1, true), black, s * 0.28, Y(hood + 0.2), z0 - 0.12);
+      inlet.material.side = THREE.DoubleSide;
+    }
+  }
+  if (big) {
+    // Zoomie headers out through the wings, angled up and back; a big V gets a pipe per cylinder
+    const per = Math.min(Math.ceil(cyl / 2), 6);
+    for (const s of [-1, 1]) for (let i = 0; i < per; i++) {
+      const zz = z0 - 0.45 + i * 0.9 / Math.max(1, per - 1);
+      const x = s * (spec.width / 2 - 0.12), y = Y(hood - 0.05);
+      const pipe = add(new THREE.CylinderGeometry(0.038, 0.042, 0.85, 10, 1, true), heat, x, y + 0.2, zz);
+      pipe.material.side = THREE.DoubleSide;
+      pipe.rotation.set(-0.85, 0, s * -0.5);                                                    // up, out and back
+      const tip = new THREE.Vector3(0, 0.42, 0).applyEuler(pipe.rotation).add(pipe.position);
+      if (i % 2 === 0) extraEx.push([tip.x, tip.y + spec.cgHeight + (spec.rideDrop || 0), tip.z, -0.9]);
+    }
+  }
+  return out;
 }
 
 const BODIES = { charger: buildCharger, gtr: buildGTR, sentra: buildSentra, amg: buildAMG };
@@ -167,7 +281,14 @@ export class CarModel {
       add, Y, spec, zf, zr, zF, zR, paint: this.paint, chrome, black, vinyl, glass, trim,
       tailMat: this.tailMat, reverseMat: this.reverseMat, headMat, interior: this.interior, envMap,
     };
+    ctx.body = this.body;
+    ctx.zF = zF;
+    // The engine's own hardware first, so the Charger knows whether its stock blower is replaced
+    const dressed = engineDress(ctx);
+    ctx.dressBlower = dressed.blower;
+    ctx.dressBig = dressed.big || spec.engineType === 'radial';
     const built = (BODIES[spec.model] || buildCharger)(ctx);
+    built.exhausts = built.exhausts.concat(dressed.exhausts);
     const rim = built.rim || CHARGER_RIM;
 
     // Wheel wells: a dark open tube in each arch, so you never see body colour (or daylight) round the tyres
@@ -281,9 +402,10 @@ export class CarModel {
     });
     const flameGeo = new THREE.ConeGeometry(0.075, 1, 14, 1, true).translate(0, 0.5, 0).rotateX(Math.PI / 2);
     this.flames = [];
-    for (const [x, h, z] of built.exhausts) {
+    for (const [x, h, z, tilt = 0] of built.exhausts) {
       const f = new THREE.Mesh(flameGeo, this.flameMat);
       f.position.set(x, Y(h), z);
+      f.rotation.x = tilt;   // zoomie headers point up and back
       f.renderOrder = 6;
       f.frustumCulled = false;
       f.visible = false;

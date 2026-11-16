@@ -12,15 +12,26 @@ export const STOCK = Object.freeze({
   bore: 108, stroke: 95.3, cr: 9.0, cyl: 8, layout: 'V',
   induction: 'sc', boost: 8,
   trans: 'manual', gears: [2.95, 1.94, 1.34, 1.0, 0.8], final: 3.23,
-  tireFront: 225, tireRear: 275, tireDia: 27.0, tier: 'stock',
+  tireFront: 225, tireRear: 275, tireDia: 27.0, tier: 'stock', voice: 'hemi', engine: 'piston', fuel: 'gas',
 });
 
 export const LIMITS = {
-  bore: [70, 115, 0.5], stroke: [60, 110, 0.5], cr: [7.5, 14, 0.1], boost: [3, 60, 0.5],
-  gear: [0.5, 4.5, 0.01], final: [2.2, 5.5, 0.01],
+  bore: [50, 160, 0.5], stroke: [35, 170, 0.5], cr: [6.5, 15, 0.1], boost: [3, 70, 0.5],
+  cyl: [1, 24, 1], rotors: [1, 6, 1], rotorCc: [400, 1000, 10],
+  gear: [0.5, 4.5, 0.01], final: [1.5, 12, 0.01],
   tireFront: [185, 335, 5], tireRear: [195, 355, 5], tireDia: [24, 30, 0.1],
 };
-export const CYLINDERS = [4, 6, 8, 10, 12];
+export const CYLINDERS = Array.from({ length: 24 }, (_, i) => i + 1);
+export const RADIAL_CYL = [3, 5, 7, 9, 14, 18, 28];
+export const ENGINE_TYPES = { piston: 'Piston', rotary: 'Wankel rotary', radial: 'Radial' };
+// Fuels: extra knock margin (effective CR), energy per charge (BMEP ×), wear per second at full
+// load (nitromethane eats an engine in ~20 s of wide-open throttle), throttle response (s)
+export const FUELS = {
+  gas: { name: 'Gasoline', short: 'Gas', knock: 0, k: 1, wear: 0, tau: 0.045 },
+  e85: { name: 'E85', short: 'E85', knock: 3.5, k: 1.06, wear: 0, tau: 0.045 },
+  methanol: { name: 'Methanol', short: 'Methanol', knock: 9, k: 1.14, wear: 0, tau: 0.04 },
+  nitro: { name: 'Nitromethane', short: 'Nitro', knock: 40, k: 4.0, wear: 1 / 20, tau: 0.016 },
+};
 export const LAYOUTS = { V: 'V-engine', B: 'Boxer', I: 'Inline' };
 export const INDUCTION = { na: 'Naturally aspirated', turbo: 'Turbocharged', sc: 'Supercharged', twin: 'Twincharged' };
 // rating: input torque (Nm) the box survives. Street boxes scale with the car (transK: a Sentra's CVT
@@ -44,13 +55,16 @@ export const TIERS = {
   forged: { antiLag: 0, spool: 0, name: 'Forged internals', short: 'Forged', strength: 2.5, floorBar: 32, tq: 1.0, knock: 0, piston: 21.5, valve: 1.04, kg: 6, heat: 8 },
   race: { antiLag: 0.6, spool: -0.06, name: 'Race engine', short: 'Race', strength: 3.8, floorBar: 48, tq: 1.12, knock: 19, piston: 23, valve: 1.1, kg: 12, heat: 10 },
   promod: { antiLag: 1, spool: -0.16, name: 'Pro Mod billet', short: 'Pro Mod', strength: 6.5, floorBar: 85, tq: 1.35, knock: 30, piston: 25, valve: 1.18, kg: 30, heat: 12 },
+  // Pneumatic valve springs and tiny, light pistons: 18,000+ rpm, a narrow peaky power band
+  f1: { antiLag: 1, spool: -0.1, name: 'F1 (pneumatic valves)', short: 'F1', strength: 3.5, floorBar: 45, tq: 1.1, knock: 17, piston: 26, valve: 2.3, kg: -10, heat: 15, cap: 20000, peaky: true, idle: 4000 },
+  // Top Fuel: forged-billet everything, built to survive ~11,000 hp for a few seconds at a time
+  topfuel: { antiLag: 1, spool: 0, name: 'Top Fuel', short: 'Top Fuel', strength: 14, floorBar: 300, tq: 1.45, knock: 0, piston: 30, valve: 1.15, kg: 80, heat: 5, cap: 9000, idle: 2000 },
 };
 
 /** Which cylinder counts each layout can be built with (real-world configurations). */
 export function layoutAllows(layout, cyl) {
-  if (layout === 'I') return cyl <= 8;           // I4, I6, I8 — longer would not fit (or exist)
-  if (layout === 'B') return cyl !== 10;         // flat-4, flat-6, flat-8, flat-12
-  return true;                                    // V4 … V12
+  if (layout === 'I') return cyl <= 14;          // single-cylinder up to a ship-style straight-14
+  return cyl >= 2 && cyl % 2 === 0;              // V and boxer: two equal banks (V2 … V24, flat-2 … flat-24)
 }
 
 /** Clamp every field into range and repair impossible combinations. */
@@ -60,9 +74,17 @@ export function sanitize(b, stock = STOCK) {
     const [lo, hi] = LIMITS[k];
     o[k] = clamp(Number.isFinite(+o[k]) ? +o[k] : stock[k], lo, hi);
   }
-  if (!CYLINDERS.includes(+o.cyl)) o.cyl = stock.cyl; else o.cyl = +o.cyl;
-  if (!LAYOUTS[o.layout]) o.layout = stock.layout;
-  if (!layoutAllows(o.layout, o.cyl)) o.layout = 'V';
+  if (!ENGINE_TYPES[o.engine]) o.engine = 'piston';
+  if (!FUELS[o.fuel]) o.fuel = 'gas';
+  o.rotors = clamp(Math.round(+o.rotors || 2), 1, 6);
+  o.rotorCc = clamp(+o.rotorCc || 654, LIMITS.rotorCc[0], LIMITS.rotorCc[1]);
+  if (!CYLINDERS.includes(+o.cyl) && !RADIAL_CYL.includes(+o.cyl)) o.cyl = stock.cyl; else o.cyl = +o.cyl;
+  if (o.engine === 'radial') { if (!RADIAL_CYL.includes(o.cyl)) o.cyl = 9; o.layout = 'R'; }
+  else {
+    if (o.cyl > 24) o.cyl = 24;
+    if (!LAYOUTS[o.layout]) o.layout = stock.layout === 'R' ? 'V' : stock.layout;
+    if (!layoutAllows(o.layout, o.cyl)) o.layout = o.cyl % 2 || o.cyl < 2 ? 'I' : 'V';
+  }
   if (!INDUCTION[o.induction]) o.induction = stock.induction;
   if (!TRANS[o.trans]) o.trans = stock.trans;
   if (!TIERS[o.tier]) o.tier = 'stock';
@@ -87,20 +109,29 @@ function otto(cr) { return 1 - Math.pow(cr, -0.3); }
 
 export function engineModel(input, stock = STOCK) {
   const b = sanitize(input, stock);
+  const tier = TIERS[b.tier], fuel = FUELS[b.fuel];
+  const rotary = b.engine === 'rotary', radial = b.engine === 'radial';
   const boreM = b.bore / 1000, strokeM = b.stroke / 1000;
-  const disp = b.cyl * Math.PI / 4 * boreM * boreM * strokeM;          // m³
+  // Displacement as a four-stroke sees it. A Wankel's chambers fire once per shaft turn, so each
+  // rotor counts twice its chamber volume (a 1.3 L 13B breathes like a 2.6 L piston engine).
+  const disp = rotary ? b.rotors * b.rotorCc * 1e-6 * 2 : b.cyl * Math.PI / 4 * boreM * boreM * strokeM;   // m³
   const dispL = disp * 1000;
   const rodRatio = b.bore / b.stroke;
-  // Rev limits
-  const tier = TIERS[b.tier];
-  const pistonLimit = tier.piston * 60 / (2 * strokeM);
-  const valveLimit = 9500 * Math.pow(86 / b.bore, 0.6) * tier.valve;
-  const redline = Math.round(Math.min(pistonLimit, valveLimit, 10500) / 100) * 100;
+  // Rev limits: piston speed (stroke) and valvetrain (bore); radials are slow-turning aero engines;
+  // a rotary has no valves at all — apex seals and port timing set its (very high) ceiling
+  const cap = tier.cap || 10500;
+  let redline;
+  if (rotary) redline = Math.min(8500 * Math.pow(654 / b.rotorCc, 0.25) * Math.sqrt(tier.valve), cap + 1500);
+  else if (radial) redline = Math.min(13 * 60 / (2 * strokeM) * tier.valve, 4500);
+  else redline = Math.min(tier.piston * 60 / (2 * strokeM), 9500 * Math.pow(86 / b.bore, 0.6) * tier.valve, cap);
+  redline = Math.round(redline / 100) * 100;
   const limiter = redline + 300;
-  // Volumetric efficiency vs x = rpm / redline
-  const xp = clamp(0.71 + 0.22 * (rodRatio - 1.133), 0.55, 0.85);       // torque peak position
+  // Volumetric efficiency vs x = rpm / redline: where the torque peaks and how fast it falls away
+  // below the peak. Radials are all low-down torque; rotaries and F1 engines are peaky.
+  const xp = radial ? 0.42 : rotary ? 0.8 : tier.peaky ? 0.84 : clamp(0.71 + 0.22 * (rodRatio - 1.133), 0.55, 0.85);
+  const lowK = radial ? 0.7 : rotary ? 2.1 : tier.peaky ? 1.8 : 1.25;
   const ve = (x) => {
-    if (x <= xp) return Math.max(0.12, 1 - 1.25 * Math.pow(xp - x, 1.63));
+    if (x <= xp) return Math.max(0.12, 1 - lowK * Math.pow(xp - x, 1.63));
     const d = x - xp, v = 1 - 2.3 * Math.pow(d, 2.2);
     return Math.max(0.05, x > limiter / redline ? v - 3 * (x - limiter / redline) : v);
   };
@@ -120,25 +151,27 @@ export function engineModel(input, stock = STOCK) {
   };
   const lossAt = (x, bst) => {
     // Crank power to drive the compressor (blower) or exhaust back-pressure (turbo)
-    if (b.induction === 'sc') return 0.13 * bst * x;
+    if (b.induction === 'sc') return Math.min(0.2, 0.13 * bst * x);   // (a huge blower still takes no more than ~20 %)
     if (b.induction === 'twin') return 0.13 * bst * x * (1 - smooth(spoolStart, spoolStart + 0.22, x)) * 0.6 + 0.03 * bst;
     if (b.induction === 'turbo') return 0.03 * bst;
     return 0;
   };
-  // Small cylinders breathe and burn a bit better per litre; more cylinders = more friction
-  const perCylL = dispL / b.cyl;
-  const sizeK = 1 + 0.05 * clamp(0.875 - perCylL, -0.5, 0.5);
-  const fricK = 1 - 0.006 * (b.cyl - 8) - (b.layout === 'B' ? -0.01 : 0);
+  // Small cylinders breathe and burn a bit better per litre; more cylinders = more friction.
+  // A rotary's long, moving combustion chamber burns less efficiently.
+  const nComb = rotary ? b.rotors : b.cyl;
+  const perCylL = dispL / nComb;
+  const sizeK = (1 + 0.05 * clamp(0.875 - perCylL, -0.5, 0.5)) * (rotary ? 0.86 : 1);
+  const fricK = 1 - 0.006 * clamp(nComb - 8, -8, 16) - (b.layout === 'B' ? -0.01 : 0);
   const eta = otto(b.cr) / otto(10);
   const torqueAt = (rpm) => {
     const x = rpm / redline;
     const bst = boostAt(x);
     const prx = 1 + bst;
     const crEff = b.cr * Math.pow(prx, 1 / 1.3);
-    const kcr = Math.max(b.knockCR || KNOCK_CR, tier.knock);
+    const kcr = Math.max(b.knockCR || KNOCK_CR, tier.knock) + fuel.knock;
     const knock = crEff > kcr ? Math.max(0.55, 1 - 0.07 * (crEff - kcr)) : 1;
     // tq: per-car calibration (cam, head and ECU quality the bore/stroke model can't see)
-    const t = BMEP_NA * disp / (4 * Math.PI) * eta * sizeK * fricK * ve(x) * Math.pow(prx, 0.85) * (1 - lossAt(x, bst)) * knock * (b.tq || 1) * tier.tq;
+    const t = BMEP_NA * disp / (4 * Math.PI) * eta * sizeK * fricK * ve(x) * Math.pow(prx, 0.85) * (1 - lossAt(x, bst)) * knock * (b.tq || 1) * tier.tq * fuel.k;
     return { t: Math.max(0, t), pr: prx, knock, over: crEff - kcr };
   };
   // Tabulate (the drivetrain interpolates this table)
@@ -158,18 +191,19 @@ export function engineModel(input, stock = STOCK) {
     }
   }
   // Engine mass: block + per-litre + per-cylinder, layout, induction hardware
-  const layoutK = { V: 1, I: 0.96, B: 1.04 }[b.layout];
-  const indKg = { na: 0, turbo: 28, sc: 32, twin: 55 }[b.induction];
-  const mass = (60 + 22 * dispL + 8 * b.cyl) * layoutK + indKg + tier.kg;
+  const layoutK = { V: 1, I: 0.96, B: 1.04, R: 0.9 }[b.layout] || 1;
+  const indKg = { na: 0, turbo: 28, sc: 32, twin: 55 }[b.induction] * Math.max(1, Math.sqrt(dispL / 7));
+  const mass = Math.max(40, (rotary ? 40 + 34 * b.rotors : (60 + 22 * dispL + 8 * b.cyl) * layoutK) + indKg + tier.kg);
   return {
     build: b, disp, dispL, ci: dispL * 61.0237, redline, limiter, curve, boostCurve,
     peakTorque: peakT, peakTorqueRpm: peakTRpm, peakHp: peakP / HP, peakHpRpm: peakPRpm,
     boostPeakPsi: b.induction === 'na' ? 0 : (PR - 1) * PSI_ATM, knockLimited: minKnock < 0.97, knockLoss: 1 - minKnock,
     // > 0: so far past the knock limit that retarding the timing can't save it (it will blow)
     detonation: Math.max(0, maxOver - 2.5),
-    mass, idleRpm: perCylL < 0.5 ? 950 : 850,
-    inertia: 0.3 * Math.pow(dispL / 6.98, 0.8) * (b.layout === 'B' ? 0.95 : 1),
-    frictionScale: Math.pow(dispL / 6.98, 0.85) * (1 + 0.01 * (b.cyl - 8)),
+    mass, idleRpm: tier.idle || (radial ? 600 : rotary ? 1000 : perCylL < 0.5 ? 950 : 850),
+    inertia: Math.max(0.03, 0.3 * Math.pow(dispL / 6.98, 0.8) * (b.layout === 'B' ? 0.95 : 1) * (rotary ? 0.55 : tier.peaky ? 0.45 : 1)),
+    frictionScale: Math.pow(dispL / 6.98, 0.85) * (1 + 0.01 * clamp(nComb - 8, -8, 16)) * (rotary ? 0.8 : 1),
+    name: engineName(b), throttleTau: fuel.tau, fuelWear: fuel.wear,
     turbo: b.induction === 'turbo' || b.induction === 'twin',
     blower: b.induction === 'sc' || b.induction === 'twin',
   };
@@ -211,6 +245,10 @@ export function deriveSpec(base, input, stock = STOCK) {
     // Component limits (drivetrain.js breaks things past these)
     tier: b.tier, blockTorque: blockTorque(e, stockEngine), limiterHeat: TIERS[b.tier].heat, detonation: e.detonation,
     antiLag: e.turbo ? TIERS[b.tier].antiLag : 0,
+    // Launch-control two-step: where the engine has torque to launch on (a radial: low; an F1: 10,000+)
+    launchRpm: Math.round(Math.min(Math.max(3500, e.peakTorqueRpm * 0.6), e.redline * 0.7) / 100) * 100,
+    throttleTau: e.throttleTau, fuelWear: e.fuelWear, fuel: b.fuel, engineType: b.engine, engineName: e.name,
+    dispL: e.dispL, engineMass: e.mass, rotors: b.rotors, voice: engineVoice(b), boostPeak: b.induction === 'na' ? 0 : b.boost,
     transRating: t.strong ? t.rating : t.rating * (base.transK || 1),
   };
 }
@@ -271,7 +309,7 @@ export function dragRun(spec, maxTime = 60, { failures = true } = {}) {
   const d = new Drivetrain(s);
   const dt = 1 / 120, g = 9.81;
   d.tractionControl = true;
-  d.autoClutch = s.transType !== 'manual';
+  d.autoClutch = s.transType !== 'manual' || s.launchRpm > 3500;   // (a peaky engine needs the clutch slipped)
   d.running = true;
   d.engineW = s.idleRpm * Math.PI / 30;
   const L = s.wheelbase || 2.921;
@@ -321,9 +359,28 @@ export function dragRun(spec, maxTime = 60, { failures = true } = {}) {
   return { t100, t200, quarter, top, trace, failure };
 }
 
+/**
+ * Which synth voice an engine gets: the exotic archetypes have their own, a car's factory engine
+ * keeps its voice wherever it's swapped (b.voice), anything else sounds like a big American V8.
+ */
+export function engineVoice(b) {
+  if (b.engine === 'rotary') return 'rotary';
+  if (b.engine === 'radial') return 'radial';
+  if (b.fuel === 'nitro') return 'topfuel';
+  if (b.tier === 'f1') return 'f1';
+  if (b.cyl >= 14) return 'turbine';
+  return b.voice || null;
+}
+
+/** e.g. "V24", "3-ROTOR", "18-CYL RADIAL", "FLAT-6", "I1" */
+export function engineName(b) {
+  if (b.engine === 'rotary') return `${b.rotors}-ROTOR`;
+  if (b.engine === 'radial') return `${b.cyl}-CYL RADIAL`;
+  return `${b.layout === 'B' ? 'FLAT-' : b.layout === 'I' ? 'I' : 'V'}${b.cyl}`;
+}
+
 /** One-line summary for menus, e.g. "712 HP · 7.0 L V8 · BLOWN". */
 export function summary(e) {
   const tag = { na: 'NA', turbo: 'TURBO', sc: 'BLOWN', twin: 'TWINCHARGED' }[e.build.induction];
-  const lay = e.build.layout === 'B' ? 'FLAT-' : e.build.layout === 'I' ? 'I' : 'V';
-  return `${Math.round(e.peakHp)} HP · ${e.dispL.toFixed(1)} L ${lay}${e.build.cyl} · ${tag}`;
+  return `${Math.round(e.peakHp)} HP · ${e.dispL.toFixed(1)} L ${engineName(e.build)} · ${tag}`;
 }

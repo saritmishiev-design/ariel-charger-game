@@ -18,7 +18,8 @@ export const CARS = {
     name: "1979 Dodge Charger", short: 'CHARGER', tag: '700 HP · RWD · BLOWN HEMI V8',
     blurb: 'Drift-happy muscle. Skinny tyres, big lope, the rear always wants to come round.',
     base: { ...CHARGER_SPEC, drive: 'RWD', model: 'charger', audio: 'hemi', powerSlide: true, turnInAssist: 1.6,
-      eye: [-0.36, 1.19, 2.1], hood: [0, 1.03, -0.7], transK: 1 },
+      eye: [-0.36, 1.19, 2.1], hood: [0, 1.03, -0.7], transK: 1,
+      bay: { L: 8.5, cyl: 8, hood: 0.92, u: 0.28 } },   // engine bay: what fits under the bonnet, where the bonnet is
     build: STOCK,
     tt: { boostAdd: 6, crMax: 9.5 },
     longK: 0.93,                  // stock gearing is already near-ideal for top speed
@@ -42,10 +43,10 @@ export const CARS = {
       dragCoefficient: 0.27, frontalArea: 2.2, rollingResistance: 0.012,
       maxSteer: 0.64, steerSpeedFalloff: 27,
       drive: 'AWD', model: 'gtr', audio: 'vr38', powerSlide: false, turnInAssist: 1.9,
-      eye: [-0.37, 1.1, 1.72], hood: [0, 0.98, -0.62],
+      eye: [-0.37, 1.1, 1.72], hood: [0, 0.98, -0.62], bay: { L: 4.5, cyl: 8, hood: 0.86, u: 0.05 },
     },
     build: calibrated({
-      bore: 95.5, stroke: 88.4, cr: 9.0, cyl: 6, layout: 'V', induction: 'turbo', boost: 20, knockCR: 19.5,
+      bore: 95.5, stroke: 88.4, cr: 9.0, cyl: 6, layout: 'V', induction: 'turbo', boost: 20, knockCR: 19.5, voice: 'vr38',
       trans: 'dct', gears: [3.4, 2.1, 1.5, 1.1, 0.82], final: 3.7,
       tireFront: 255, tireRear: 285, tireDia: 28.0,
     }, 800),
@@ -70,10 +71,10 @@ export const CARS = {
       dragCoefficient: 0.29, frontalArea: 2.2, rollingResistance: 0.011,
       maxSteer: 0.6, steerSpeedFalloff: 20,
       drive: 'FWD', model: 'sentra', audio: 'mr20', powerSlide: false, turnInAssist: 0.75,
-      eye: [-0.37, 1.18, 1.7], hood: [0, 1.06, -0.55],
+      eye: [-0.37, 1.18, 1.7], hood: [0, 1.06, -0.55], bay: { L: 2.6, cyl: 6, hood: 0.92, u: -0.15 },
     },
     build: calibrated({
-      bore: 84, stroke: 90.1, cr: 11.2, cyl: 4, layout: 'I', induction: 'na', boost: 8,
+      bore: 84, stroke: 90.1, cr: 11.2, cyl: 4, layout: 'I', induction: 'na', boost: 8, voice: 'mr20',
       // CVT modelled as a 5-step automatic; the top step is short, so it runs out of revs near 200 km/h
       trans: 'auto', gears: [2.65, 1.7, 1.28, 1.07, 0.98], final: 4.4,
       tireFront: 205, tireRear: 205, tireDia: 25.7,
@@ -100,10 +101,10 @@ export const CARS = {
       maxSteer: 0.62, steerSpeedFalloff: 26,
       drive: 'AWD', model: 'amg', audio: 'm177', powerSlide: false, turnInAssist: 1.7, abs: true,
       fastAuto: 0.12,             // the MCT's wet clutch shifts far quicker than a torque-converter auto
-      eye: [-0.38, 1.13, 1.85], hood: [0, 1.0, -0.62],
+      eye: [-0.38, 1.13, 1.85], hood: [0, 1.0, -0.62], bay: { L: 6, cyl: 8, hood: 0.88, u: 0.1 },
     },
     build: calibrated({
-      bore: 83, stroke: 92, cr: 8.6, cyl: 8, layout: 'V', induction: 'turbo', boost: 21, knockCR: 18,
+      bore: 83, stroke: 92, cr: 8.6, cyl: 8, layout: 'V', induction: 'turbo', boost: 21, knockCR: 18, voice: 'm177',
       spool: -0.2,                // hot-V twin-scroll turbos: full boost from ~2,500 rpm
       // AMG Speedshift MCT (wet-clutch automatic), five of its nine steps
       trans: 'auto', gears: [4.4, 2.75, 1.85, 1.3, 0.98], final: 3.0,
@@ -173,6 +174,7 @@ export function carSpec(carId, tune = TUNE_DEFAULT, custom = null) {
   spec.tyreType = 'street';
   spec.rideDrop = 0;
   spec.rollVisual = 1;
+  spec.audio = spec.voice || 'hemi';   // the engine's own voice, whatever body it's in
   if (car.base.fastAuto && b.trans === 'auto') spec.shiftTime = car.base.fastAuto;
   // Brake system: compound friction × line pressure sets the clamping force; bias splits it
   const bc = BRAKES[tune.brake] || BRAKES.street;
@@ -285,7 +287,7 @@ export function performance(spec, engine) {
 /** e.g. "800 HP · AWD · V6 TWIN-TURBO · DCT" */
 export function carSummary(carId, engine, build) {
   const car = CARS[carId];
-  const lay = build.layout === 'B' ? 'FLAT-' : build.layout === 'I' ? 'I' : 'V';
   const ind = { na: 'NA', turbo: 'TURBO', sc: 'BLOWN', twin: 'TWINCHARGED' }[build.induction];
-  return `${Math.round(engine.peakHp)} HP · ${car.base.drive} · ${engine.dispL.toFixed(1)} L ${lay}${build.cyl} ${ind}`;
+  const fuel = build.fuel && build.fuel !== 'gas' ? ` · ${build.fuel === 'nitro' ? 'NITRO' : build.fuel.toUpperCase()}` : '';
+  return `${Math.round(engine.peakHp)} HP · ${car.base.drive} · ${engine.dispL.toFixed(1)} L ${engine.name} ${ind}${fuel}`;
 }
