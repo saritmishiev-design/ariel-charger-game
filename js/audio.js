@@ -313,7 +313,7 @@ export class AudioEngine {
     const spool = this.engineCfg.turbo && s.running ? clamp(s.spool || 0, 0, 1) : 0;
     const bst = clamp((s.boostPsi || 0) / 20, 0, 1.5);
     this.ramp(this.turboOsc.frequency, 1800 + 7000 * spool * (0.4 + 0.6 * Math.min(1, bst)), 0.05);
-    const twinK = this.engineCfg.profile === 'vr38' ? 1.6 : 1;   // two IHI turbines, right by your feet
+    const twinK = this.engineCfg.profile === 'vr38' ? 1.6 : this.engineCfg.profile === 'm177' ? 0.7 : 1;   // two IHI turbines, right by your feet
     this.ramp(this.turboOscG.gain, spool * spool * 0.02 * twinK * (0.5 + bst), 0.05);
     this.ramp(this.turboNF.frequency, 900 + 2600 * spool, 0.05);
     this.ramp(this.turboNG.gain, spool * 0.07 * twinK * (0.4 + bst), 0.05);

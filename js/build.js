@@ -107,7 +107,7 @@ export function engineModel(input, stock = STOCK) {
   // Boost (pressure ratio − 1) vs x
   const PR = 1 + b.boost / PSI_ATM;
   // Bigger boost = bigger turbine = later spool; race tiers run ball-bearing turbos and anti-lag
-  const spoolStart = clamp(0.2 + 0.011 * Math.min(b.boost, 25) + 0.004 * Math.max(0, b.boost - 25) - 0.025 * (dispL - 3) + tier.spool, 0.12, 0.6);
+  const spoolStart = clamp(0.2 + 0.011 * Math.min(b.boost, 25) + 0.004 * Math.max(0, b.boost - 25) - 0.025 * (dispL - 3) + tier.spool + (b.spool || 0), 0.12, 0.6);
   const turbo = (x) => (PR - 1) * smooth(spoolStart, spoolStart + 0.22, x);
   const blower = (x) => (PR - 1) * clamp(0.5 + 1.6 * x, 0, 1);
   const boostAt = (x) => {

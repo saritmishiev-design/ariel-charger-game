@@ -2,6 +2,7 @@
 // its performance bars and the driving physics all read the same spec from here.
 import { SPEC as CHARGER_SPEC } from './config.js';
 import { STOCK, sanitize, engineModel, deriveSpec, dragRun, topSpeed, LIMITS } from './build.js';
+import { BRAKES, BRAKE_LIMITS, stopDistance } from './brakes.js';
 
 const IN = 0.0254;
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
@@ -79,12 +80,44 @@ export const CARS = {
     }, 149),
     tt: { boostAdd: 9, crMax: 9.3 },
   },
+
+  amg: {
+    name: 'Mercedes-AMG GT 63', short: 'AMG GT 63', tag: '630 HP · AWD · 4.0 L V8 BITURBO',
+    blurb: 'Two tonnes of four-door AMG. 4MATIC+ all-wheel drive, a savage launch and that deep V8 burble.',
+    base: {
+      ...CHARGER_SPEC,
+      length: 5.054, width: 1.953, height: 1.447, wheelbase: 2.951, trackFront: 1.68, trackRear: 1.65,
+      frontOverhang: 0.98, mass: 2120, frontWeight: 0.53, cgHeight: 0.52,
+      inertia: { pitch: 4300, yaw: 4700, roll: 800 },
+      tyreMu: 1.38,
+      suspensionRestLength: 0.28, suspensionStiffness: 32, dampingCompression: 4.2, dampingRelaxation: 3.2, rollInfluence: 0.06,
+      // Air suspension and big Michelins: ~1.5 g, rear-biased 4MATIC+ keeps it stable
+      frictionSlipFront: 1.08, frictionSlipRear: 1.2,
+      drivetrainEfficiency: 0.85, clutchMaxTorque: 1700, rearAxleInertia: 4.6,
+      transK: 1.3,
+      maxBrakeForce: 30000, brakeBiasFront: 0.62, handbrakeTorque: 3600, wheelieTorque: 0,
+      dragCoefficient: 0.3, frontalArea: 2.35, rollingResistance: 0.012,
+      maxSteer: 0.62, steerSpeedFalloff: 26,
+      drive: 'AWD', model: 'amg', audio: 'm177', powerSlide: false, turnInAssist: 1.7, abs: true,
+      fastAuto: 0.12,             // the MCT's wet clutch shifts far quicker than a torque-converter auto
+      eye: [-0.38, 1.13, 1.85], hood: [0, 1.0, -0.62],
+    },
+    build: calibrated({
+      bore: 83, stroke: 92, cr: 8.6, cyl: 8, layout: 'V', induction: 'turbo', boost: 21, knockCR: 18,
+      spool: -0.2,                // hot-V twin-scroll turbos: full boost from ~2,500 rpm
+      // AMG Speedshift MCT (wet-clutch automatic), five of its nine steps
+      trans: 'auto', gears: [4.4, 2.75, 1.85, 1.3, 0.98], final: 3.0,
+      tireFront: 265, tireRear: 295, tireDia: 28.4,
+    }, 630),
+    tt: { boostAdd: 8, crMax: 7.9, label: 'Bigger turbos' },
+  },
 };
 
 export const TRACKS = {
   classic: { name: 'Classic Track', sub: 'ARIEL RACEWAY · 3.6 KM', blurb: 'The original: fast sweepers, a chicane and two hairpins.' },
   ring: { name: 'Nürburgring Lite', sub: 'NÜRBURGRING LITE · 7.1 KM', blurb: 'Long, fast and hilly: crests, compressions, a Karussell and a 1.6 km straight.' },
   drag: { name: '1/4 Mile Drag Strip', sub: 'QUARTER-MILE DRAG STRIP', blurb: 'Stage at the line, watch the tree, run 402 m against the clock.' },
+  free: { name: 'Open Free Roam', sub: 'OPEN FREE ROAM · 6 × 6 KM', blurb: 'A 6 km square of open tarmac, no walls. Top speed, 0–100, braking tests — go wild.' },
 };
 
 export const TUNES = {
@@ -93,7 +126,7 @@ export const TUNES = {
   tires: { label: 'Tyres', options: [['street', 'Street'], ['slicks', 'Slicks'], ['drag', 'Drag slicks']] },
   susp: { label: 'Suspension', options: [['stock', 'Stock'], ['lowered', 'Lowered']] },
 };
-export const TUNE_DEFAULT = { turbo: 'stock', final: 'stock', tires: 'street', susp: 'stock' };
+export const TUNE_DEFAULT = { turbo: 'stock', final: 'stock', tires: 'street', susp: 'stock', brake: 'street', bpress: 1, bbias: 0 };
 
 export const SETUP_DEFAULT = { track: 'classic', car: 'charger', tunes: {} };
 
@@ -106,6 +139,10 @@ export function sanitizeSetup(s) {
   for (const id of Object.keys(CARS)) {
     const t = { ...TUNE_DEFAULT, ...((o.tunes || {})[id] || {}) };
     for (const [k, def] of Object.entries(TUNES)) if (!def.options.some(([v]) => v === t[k])) t[k] = TUNE_DEFAULT[k];
+    // Brake system: compound, pressure (× stock), bias (front share; 0 = the car's own)
+    if (!BRAKES[t.brake]) t.brake = 'street';
+    t.bpress = clamp(+t.bpress || 1, BRAKE_LIMITS.pressure[0], BRAKE_LIMITS.pressure[1]);
+    t.bbias = +t.bbias ? clamp(+t.bbias, BRAKE_LIMITS.bias[0], BRAKE_LIMITS.bias[1]) : 0;
     tunes[id] = t;
   }
   o.tunes = tunes;
@@ -136,6 +173,13 @@ export function carSpec(carId, tune = TUNE_DEFAULT, custom = null) {
   spec.tyreType = 'street';
   spec.rideDrop = 0;
   spec.rollVisual = 1;
+  if (car.base.fastAuto && b.trans === 'auto') spec.shiftTime = car.base.fastAuto;
+  // Brake system: compound friction × line pressure sets the clamping force; bias splits it
+  const bc = BRAKES[tune.brake] || BRAKES.street;
+  spec.brakeCompound = BRAKES[tune.brake] ? tune.brake : 'street';
+  spec.maxBrakeForce = car.base.maxBrakeForce * bc.mu * (tune.bpress || 1);
+  if (tune.bbias) spec.brakeBiasFront = tune.bbias;
+  spec.abs = car.base.abs !== false && car.base.model !== 'charger';
   if (tune.tires === 'slicks') {
     // Racing slicks: +30 % grip — traction and (through tyreMu) cornering on both axles, balance kept
     spec.tyreMu *= 1.3;
@@ -221,8 +265,11 @@ export function performance(spec, engine) {
   // Cornering grip in g: cannon's lateral limit is frictionSlip × tyreMu per axle
   const grip = (0.55 * spec.frictionSlipFront + 0.45 * spec.frictionSlipRear) * spec.tyreMu;
   const acc = accelPotential(spec);
+  // Stopping distances with this brake setup (100 km/h from warm brakes; 200 km/h back-to-back after it)
+  const stop100 = stopDistance(spec, 100 / 3.6);
+  const stop200 = stopDistance(spec, 200 / 3.6, stop100.temp);
   return {
-    hp: engine.peakHp, torque: engine.peakTorque, t100: run.t100, quarter: run.quarter, top: topSpeed(spec), grip, acc,
+    stop100, stop200, hp: engine.peakHp, torque: engine.peakTorque, t100: run.t100, quarter: run.quarter, top: topSpeed(spec), grip, acc,
     bars: {
       // Power on a log scale so a 149 hp Sentra and a 3,000 hp Pro Mod both read
       hp: clamp(Math.log(engine.peakHp / 80) / Math.log(4000 / 80), 0.03, 1),
@@ -230,6 +277,7 @@ export function performance(spec, engine) {
       accel: clamp(((run.t100 ? clamp((11 - run.t100) / 9.4, 0, 1) : 0) + clamp((acc.best - 1) / 13, 0, 1) + clamp((acc.inGear - 0.8) / 8, 0, 1)) / 3, 0.03, 1),
       top: clamp((topSpeed(spec) - 120) / (450 - 120), 0.03, 1),
       grip: clamp((grip - 0.6) / (2.4 - 0.6), 0.03, 1),
+      brake: clamp((52 - stop100.dist) / (52 - 26), 0.03, 1),
     },
   };
 }

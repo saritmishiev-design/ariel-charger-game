@@ -7,6 +7,15 @@ const SUBSTEPS = 4;
 const LAUNCH_RPM = 3500;      // launch-control two-step
 const LAUNCH_SLIP = 0.12;     // target rear slip during a launch: just past peak grip
 
+// Traction control: slip target, how far it may cut, how fast; stability cut-in angle (deg);
+// whether low-gear power slides are allowed
+export const TCS_LEVELS = [
+  { name: 'OFF', slip: 9, slideSlip: 0, floor: 1, cut: 0, recover: 9, angle: 999, slide: true },
+  { name: 'SPORT', slip: 0.3, slideSlip: 0.45, floor: 0.2, cut: 5, recover: 2.5, angle: 42, slide: true },
+  { name: 'NORMAL', slip: 0.16, slideSlip: 0.42, floor: 0.12, cut: 7, recover: 2.5, angle: 28, slide: true },
+  { name: 'MAX', slip: 0.13, slideSlip: 0, floor: 0.02, cut: 14, recover: 4, angle: 12, slide: false, prop: 30 },
+];
+
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 const smoothstep = (a, b, x) => {
   const t = clamp((x - a) / (b - a), 0, 1);
@@ -37,6 +46,8 @@ export class Drivetrain {
 
     // options
     this.tractionControl = false;
+    this.tcsLevel = 2;         // 1 SPORT (lets it slide), 2 NORMAL, 3 MAX (big-power launches, no wheelspin)
+    this.brakeFade = 1;        // brake friction multiplier from the vehicle's brake temperature
     this.autoClutch = false;
 
     // state / telemetry
@@ -65,6 +76,8 @@ export class Drivetrain {
     this.clutchSlipping = false;
     this.shiftTimer = 0;
     this.events = [];
+    this.shiftSoft = 0;
+    this.peakT = Math.max(...spec.torqueCurve.map(p => p[1]));
     this.repair();
   }
 
@@ -167,6 +180,9 @@ export class Drivetrain {
       if ((g === -1 && speed > 1.5) || (g > 0 && speed < -1.5)) { this.events.push('denied'); return false; }
       const up = g > this.gear;
       if (this.gear > 0 && g > 0) this.shiftTimer = this.spec.shiftTime ?? 0.1;   // Lenco: 0, no cut at all
+      // The new gear's clutch pack slips as it takes up, so the engine's spinning mass isn't
+      // slammed into the tyres in one step (that would light them up and spin a big-power car)
+      if (this.gear > 0 && g > 0) this.shiftSoft = 0.12;
       this.gear = g;
       this.events.push(up ? 'shiftUp' : 'shiftDown');
       return true;
@@ -235,7 +251,7 @@ export class Drivetrain {
     } else if (this.launchArmed) {
       this.launchArmed = false;
       if (this.running && this.gear === 1 && this.brakeInput <= 0.5 && this.throttleInput > 0.5) {
-        this.launchTimer = 2.5; this.launchClutch = 0.3; this.launchFactor = 1;
+        this.launchTimer = 2.5; this.launchClutch = 0.3; this.launchFactor = 1; this.launchSlipCap = 0.3;
         this.events.push('launch');
       }
     }
@@ -245,9 +261,14 @@ export class Drivetrain {
       // Closed loop on rear slip: the clutch feeds in only as much torque as the tyres can take
       // (and backs off if the revs sag), the throttle trims any excess
       const err = this.slip - LAUNCH_SLIP;
-      if (err > 0) this.launchClutch = Math.max(0.15, this.launchClutch - dt * 8 * Math.min(1, err / 0.2));
-      else if (this.rpm > 2600) this.launchClutch = Math.min(1, this.launchClutch + dt * 3.5);
-      if (this.rpm < 2200) this.launchClutch = Math.max(0.15, this.launchClutch - dt * 4);
+      if (err > 0) this.launchSlipCap = Math.max(0.15, this.launchSlipCap - dt * 8 * Math.min(1, err / 0.2));
+      else this.launchSlipCap = Math.min(1, this.launchSlipCap + dt * 3.5);
+      // ...and on revs: the clutch carries about what the engine makes at the launch rpm (more as
+      // the revs rise), so a car with all-wheel-drive grip — no wheelspin to regulate — pulls hard
+      // without bogging or hunting
+      const Tw = this.fullTorque(this.rpm) * clamp(1 + (this.rpm - 3000) / 700, 0.25, 2);
+      const revCap = Math.pow(clamp(Tw / s.clutchMaxTorque, 0, 1), 1 / 1.4);
+      this.launchClutch += (Math.max(0.15, Math.min(this.launchSlipCap, revCap)) - this.launchClutch) * Math.min(1, dt * 25);
       if (err > 0.05) this.launchFactor = Math.max(0.3, this.launchFactor - dt * 6 * Math.min(1, err / 0.3));
       else this.launchFactor = Math.min(1, this.launchFactor + dt * 2.5);
     } else this.launchFactor = 1;
@@ -277,19 +298,24 @@ export class Drivetrain {
       this.boostPsi = (this.boostPR(this.rpm) - 1) * this.spool * 14.7;
     }
 
-    const lowGearWot = s.powerSlide !== false && this.running && this.gear > 0 && this.gear <= 2 && this.throttleInput > 0.85 && !launching;
+    const TL = TCS_LEVELS[this.tractionControl ? this.tcsLevel : 0];
+    const lowGearWot = s.powerSlide !== false && TL.slide && this.running && this.gear > 0 && this.gear <= 2 && this.throttleInput > 0.85 && !launching;
     const nearLimiter = this.rpm > s.limiterRpm - 900;
     const slideTarget = lowGearWot ? (nearLimiter ? 1 : 0.6) : 0;
     this.powerSlide += (slideTarget - this.powerSlide) * Math.min(1, dt * (slideTarget > this.powerSlide ? 5 : 2.5));
 
-    // Traction control (optional). In a low-gear power slide it lets the tyres spin up to a
-    // drift-friendly slip instead of shutting the slide down.
-    const slipLimit = 0.16 + this.powerSlide * 0.42;
-    const floor = 0.12 + this.powerSlide * 0.2;
-    if (this.tractionControl && this.gear > 0 && this.slip > slipLimit && this.rpm > 1800) {
-      this.tcsFactor = Math.max(floor, this.tcsFactor - dt * 7);
+    // Traction control (optional, three levels). SPORT and NORMAL let the tyres spin up to a
+    // drift-friendly slip in a low-gear power slide; MAX holds the tyres right at peak grip and
+    // cuts hard, so even a 3,000 hp build launches straight instead of spinning.
+    const slipLimit = TL.slip + this.powerSlide * TL.slideSlip;
+    const floor = TL.floor + this.powerSlide * 0.2;
+    if (this.tractionControl && TL.prop && this.gear > 0) {
+      // MAX: proportional — throttle eases toward the amount that holds the slip at the target
+      this.tcsFactor = clamp(this.tcsFactor + clamp((slipLimit - this.slip) * TL.prop, -TL.cut, TL.recover) * dt, TL.floor, 1);
+    } else if (this.tractionControl && this.gear > 0 && this.slip > slipLimit && this.rpm > 1800) {
+      this.tcsFactor = Math.max(floor, this.tcsFactor - dt * TL.cut);
     } else {
-      this.tcsFactor = Math.min(1, this.tcsFactor + dt * 2.5);
+      this.tcsFactor = Math.min(1, this.tcsFactor + dt * TL.recover);
     }
     // Throttle body response
     const target = this.throttleInput * (launching ? this.launchFactor : this.tcsFactor) * (1 - this.stabilityCut);
@@ -311,12 +337,14 @@ export class Drivetrain {
     // Hand brake: the clutch opens automatically so locking the rears never stalls the engine
     if (this.handbrake && this.gear !== 0) { engage = 0; this.antiStall = Math.max(this.antiStall, 1); }
     this.clutchEngage = engage;
-    const Tcap = s.clutchMaxTorque * Math.pow(engage, 1.4);
+    if (this.shiftSoft > 0) this.shiftSoft -= dt;
+    let Tcap = s.clutchMaxTorque * Math.pow(engage, 1.4);
+    if (this.shiftSoft > 0) Tcap = Math.min(Tcap, this.peakT * 1.25);
     const G = this.ratio();
     // Service brakes on the driven axle (the vehicle brakes the other one); the hand brake works on
     // this axle only when it is the rear one (RWD) — on AWD it just opens the clutch
     const brakeShare = s.drive === 'AWD' ? 1 : s.drive === 'FWD' ? s.brakeBiasFront : 1 - s.brakeBiasFront;
-    const brakeT = this.brakeInput * s.maxBrakeForce * brakeShare * r + this.handbrake * s.handbrakeTorque * (s.drive && s.drive !== 'RWD' ? 0 : 1);
+    const brakeT = this.brakeInput * s.maxBrakeForce * this.brakeFade * brakeShare * r + this.handbrake * s.handbrakeTorque * (s.drive && s.drive !== 'RWD' ? 0 : 1);
 
     // The torque kick breaks the rears loose; once they're spinning, full grip returns so the
     // spinning tyres still drive the car forward through the slide

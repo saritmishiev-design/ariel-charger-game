@@ -14,6 +14,7 @@ export class Controls {
     this.onIgnition = onIgnition;
     this.haptic = haptic || (() => {});
     this.pedals = { gas: 0, brake: 0, clutch: 0 };
+    this.gasMode = 'slider';   // 'slider' (analog 0-100 %, finger height) or 'pedal'
     this.keys = new Set();
     this.steerMode = 'tilt';
     this.tiltRange = 32;          // degrees of phone rotation for full lock
@@ -70,18 +71,22 @@ export class Controls {
     const el = document.getElementById(`pedal-${name}`);
     const fill = el.querySelector('.fill');
     const ptrs = new Map();
+    const pct = name === 'gas' ? el.querySelector('.pct') : null;
     const valueFor = (ev) => {
       const r = el.getBoundingClientRect();
       const rel = clamp((ev.clientY - r.top) / r.height, 0, 1);
-      // Upper part of the pedal feathers it, the lower 35 % is flat-out
+      // Throttle slider: the finger's height is the throttle, 0 % at the bottom to 100 % at the top
+      if (name === 'gas' && this.gasMode === 'slider') return clamp((1 - rel - 0.05) / 0.88, 0, 1);
+      // Pedal: upper part feathers it, the lower 35 % is flat-out
       return clamp(0.3 + 0.7 * rel / 0.65, 0.3, 1);
     };
     const update = () => {
-      let v = 0;
-      for (const x of ptrs.values()) v = Math.max(v, x);
+      let v = 0, any = false;
+      for (const x of ptrs.values()) { v = Math.max(v, x); any = true; }
       this.pedals[name] = v;
       fill.style.transform = `scaleY(${v})`;
-      el.classList.toggle('down', v > 0);
+      el.classList.toggle('down', any);
+      if (pct) { pct.textContent = any ? `${Math.round(v * 100)}%` : ''; el.style.setProperty('--v', v.toFixed(3)); }
     };
     el.addEventListener('pointerdown', (ev) => {
       ev.preventDefault();

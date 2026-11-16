@@ -35,6 +35,7 @@ const RING_HILLS = [
 ];
 
 export const DRAG_LENGTH = 402.336;   // 1/4 mile in metres
+export const FREE_HALF = 3000;        // free-roam pad half-size (m)
 const DRAG_RUNUP = 90, DRAG_SHUTDOWN = 900;
 
 const DEFS = {
@@ -53,6 +54,12 @@ const DEFS = {
     gantry: 'QUARTER MILE  ·  FINISH', drag: true,
     stands: [[40, 1, 100], [40, -1, 100], [400, 1, 90]], pit: null,
     clear: [[-160, DRAG_LENGTH + DRAG_SHUTDOWN + 60, -75, 75]],
+  },
+  // A 6 × 6 km square of open tarmac with a marked 6 km test straight through the middle, no walls
+  free: {
+    layout: [[-FREE_HALF, 0], [FREE_HALF, 0]], closed: false, half: 12, seed: 2026, free: true,
+    gantry: 'OPEN FREE ROAM  ·  TEST STRAIGHT', stands: [[60, 1, 90]], pit: null,
+    clear: [[-120, 240, -60, 60]],
   },
 };
 
@@ -102,6 +109,7 @@ export class Track {
     this.scene = scene;
     this.closed = def.closed;
     this.isDrag = !!def.drag;
+    this.isFree = !!def.free;
     this.half = def.half;
     this.hills = def.hills || null;
     const pts = def.layout.map(([x, z]) => new THREE.Vector3(x, 0, z));
@@ -134,11 +142,13 @@ export class Track {
         this.curvature[i] = Math.asin(Math.max(-1, Math.min(1, cross))) / (4 * this.ds);
       }
     }
-    // Start / finish: lap line at sample 0; on the drag strip the start line is after the run-up
-    this.startIndex = this.isDrag ? Math.round(DRAG_RUNUP / this.ds) : 0;
+    // Start / finish: lap line at sample 0; on the drag strip the start line is after the run-up;
+    // free roam starts in the middle of the test straight
+    this.startIndex = this.isDrag ? Math.round(DRAG_RUNUP / this.ds) : this.isFree ? Math.round(this.N / 2) : 0;
     this.finishIndex = this.isDrag ? Math.round((DRAG_RUNUP + DRAG_LENGTH) / this.ds) : 0;
     let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
     for (const p of this.points) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minZ = Math.min(minZ, p.z); maxZ = Math.max(maxZ, p.z); }
+    if (this.isFree) { minZ = -FREE_HALF; maxZ = FREE_HALF; }
     const cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2;
     this.bounds = { minX, maxX, minZ, maxZ, cx, cz, R: Math.max(maxX - minX, maxZ - minZ, 900) / 2 + 60 };
     this.clearZones = def.clear;
@@ -149,13 +159,14 @@ export class Track {
     this.buildGround(world, materials, quality);
     this.buildRoad();
     this.buildCurbs();
-    this.buildWalls(world, materials);
+    if (!this.isFree) this.buildWalls(world, materials);
+    else this.buildFreeRoam();
     this.buildStartLine();
     this.buildScenery();
     if (this.isDrag) this.buildDragStrip();
     this.billboards = buildBillboards(this, this.group, carInfo);
     buildTrees(this, this.group, this.rand, quality, this.billboards.spots);
-    buildGrassTufts(this, this.group, this.rand, quality);
+    if (!this.isFree) buildGrassTufts(this, this.group, this.rand, quality);
     buildMountains(this.group, this.rand, this.bounds);
     this.time = 0;
   }
@@ -244,6 +255,7 @@ export class Track {
       const ground = new THREE.Mesh(new THREE.PlaneGeometry(SIZE, SIZE, 64, 64), mat);
       ground.rotation.x = -Math.PI / 2;
       ground.position.set(this.isDrag ? cx : 0, -0.03, 0);
+      if (this.isFree) ground.scale.set(3, 3, 1);
       ground.receiveShadow = true;
       this.group.add(ground);
       const body = new CANNON.Body({ mass: 0, material: materials.ground });
@@ -299,6 +311,62 @@ export class Track {
   }
 
   isGround(body) { return this.groundBodies.includes(body); }
+
+  /** Free roam: on the tarmac pad? */
+  onPad(x, z) { return this.isFree && Math.abs(x) < FREE_HALF && Math.abs(z) < FREE_HALF; }
+
+  buildFreeRoam() {
+    // The pad: one big asphalt plane (subdivided for depth precision), a few metres under the straight
+    const tex = asphaltTextures(this.rand);
+    for (const t of [tex.map, tex.roughnessMap, tex.bumpMap]) t.repeat.set(FREE_HALF / 7, FREE_HALF / 7);
+    const pad = new THREE.Mesh(new THREE.PlaneGeometry(FREE_HALF * 2, FREE_HALF * 2, 48, 48), new THREE.MeshStandardMaterial({
+      map: tex.map, roughnessMap: tex.roughnessMap, bumpMap: tex.bumpMap, bumpScale: 1, roughness: 1, color: 0xb8b8b8,
+      polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
+    }));
+    pad.rotation.x = -Math.PI / 2;
+    pad.position.y = 0.008;
+    pad.receiveShadow = true;
+    this.group.add(pad);
+    // Painted guide lines: the straight's edges and every 100 m a cross line; distance boards every 500 m
+    // (lifted clear of the tarmac instead of depth-biased: a bias on a 6 km strip seen edge-on
+    // would pull the lines in front of the car)
+    const paint = new THREE.MeshStandardMaterial({ color: 0xf0f0f0, roughness: 0.6 });
+    const yellow = new THREE.MeshStandardMaterial({ color: 0xffcf1a, roughness: 0.6 });
+    const lines = new THREE.Group();
+    for (const zz of [-this.half + 0.4, this.half - 0.4]) {
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(FREE_HALF * 2, 0.2, 300, 1), paint);
+      m.rotation.x = -Math.PI / 2; m.position.set(0, 0.034, zz);
+      lines.add(m);
+    }
+    const centre = new THREE.Mesh(new THREE.PlaneGeometry(FREE_HALF * 2, 0.15, 300, 1), yellow);
+    centre.rotation.x = -Math.PI / 2; centre.position.set(0, 0.034, 0);
+    lines.add(centre);
+    for (let x = -FREE_HALF + 100; x < FREE_HALF; x += 100) {
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(0.3, this.half * 2), x % 500 === 0 ? yellow : paint);
+      m.rotation.x = -Math.PI / 2; m.position.set(x, 0.035, 0);
+      lines.add(m);
+    }
+    this.group.add(lines);
+    const metal = new THREE.MeshStandardMaterial({ color: 0x2b2d33, metalness: 0.7, roughness: 0.4 });
+    for (let x = -FREE_HALF + 500; x < FREE_HALF; x += 500) {
+      const d = x - this.points[this.startIndex].x;
+      if (d === 0) continue;
+      const label = `${d > 0 ? '' : '−'}${Math.abs(d) >= 1000 ? `${Math.abs(d) / 1000} KM` : `${Math.abs(d)} M`}`;
+      const tx = canvasTexture(256, 128, (ctx, w, h) => {
+        ctx.fillStyle = '#111'; ctx.fillRect(0, 0, w, h);
+        ctx.strokeStyle = '#ffcf1a'; ctx.lineWidth = 8; ctx.strokeRect(6, 6, w - 12, h - 12);
+        ctx.fillStyle = '#ffcf1a'; ctx.font = 'bold 60px Impact, Arial Black, sans-serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(label, w / 2, h / 2 + 4);
+      });
+      const board = new THREE.Mesh(new THREE.BoxGeometry(0.2, 2, 4), [new THREE.MeshBasicMaterial({ map: tx }), new THREE.MeshBasicMaterial({ map: tx }), metal, metal, metal, metal]);
+      board.position.set(x, 3.2, -this.half - 4);
+      board.rotation.y = Math.PI / 2;
+      this.group.add(board);
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.25, 2.4, 0.25), metal);
+      post.position.set(x, 1.2, -this.half - 4);
+      this.group.add(post);
+    }
+  }
 
   ribbon(offsetA, offsetB, y, vScale, mask = null, segs = 1) {
     // Build a strip between two lateral offsets along the centreline. On hills each vertex sits on

@@ -118,10 +118,12 @@ export class HUD {
       el.className = t.rpm >= th ? (flash ? 'flash' : i < 2 ? 'g' : i < 4 ? 'y' : 'r') : '';
     });
 
-    this.lapEl.textContent = this.fmt(t.lapTime);
-    this.lastEl.textContent = this.fmt(t.lastLap);
-    this.bestEl.textContent = this.fmt(t.bestLap);
-    this.lapNoEl.textContent = t.lap;
+    if (!t.noLaps) {
+      this.lapEl.textContent = this.fmt(t.lapTime);
+      this.lastEl.textContent = this.fmt(t.lastLap);
+      this.bestEl.textContent = this.fmt(t.bestLap);
+      this.lapNoEl.textContent = t.lap;
+    }
     this.startBtn.classList.toggle('show', !t.running && !t.cranking);
 
     if (this.toastTimer > 0) {
@@ -131,13 +133,14 @@ export class HUD {
   }
 
   /** Engine / gearbox health gauge: shows itself once anything is under strain (1 = at the limit). */
-  health(eng, trans, blown, broken) {
+  health(eng, trans, blown, broken, brake = 0) {
     if (!this.healthEl) {
       this.healthEl = document.getElementById('health');
       this.hEng = this.healthEl.querySelector('.h-eng i');
       this.hTr = this.healthEl.querySelector('.h-tr i');
+      this.hBr = this.healthEl.querySelector('.h-br i');
     }
-    const show = blown || broken || eng > 0.75 || trans > 0.75;
+    const show = blown || broken || eng > 0.75 || trans > 0.75 || brake > 0.75;
     this.healthEl.classList.toggle('show', show);
     if (!show) return;
     const set = (el, x, dead) => {
@@ -146,6 +149,7 @@ export class HUD {
     };
     set(this.hEng, eng, blown);
     set(this.hTr, trans, broken);
+    set(this.hBr, brake, false);
   }
 
   toast(msg, secs = 2) {

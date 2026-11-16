@@ -1,7 +1,9 @@
 // Cannon-es raycast vehicle wrapped around the custom drivetrain.
 import * as CANNON from '../vendor/cannon-es.js';
-import { Drivetrain } from './drivetrain.js';
+import { Drivetrain, TCS_LEVELS } from './drivetrain.js';
+import { BRAKES, brakeFade, brakeHeat } from './brakes.js';
 
+const WHEELIE_BAR = 0.11;   // rad (~6.3°)
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 
 export class Vehicle {
@@ -107,6 +109,10 @@ export class Vehicle {
     this.wheelie = 0;          // 0..1 wheelie drive this step
     this.wheelieAmt = 0;
     this.wheelieHold = 0;
+    this.brakeCompound = BRAKES[spec.brakeCompound] || BRAKES.street;
+    this.brakeTemp = 60;       // °C, one lump for the whole brake set
+    this.brakeFade = 1;
+    this.locked = false;
     this.pitch = 0;            // nose-up angle (rad)        // seconds since/while scraping a barrier: stabilises the slide
     this._fwd = new CANNON.Vec3();
     this._right = new CANNON.Vec3();
@@ -251,20 +257,56 @@ export class Vehicle {
       b.torque.vadd(this._tmp, b.torque);
     }
 
+    // Wheelie bars: past ~6° nose-up the bar touches down behind the rear axle and pushes back,
+    // so a 3 g launch can't rotate the car onto its tail (or over it)
+    if (pitch > WHEELIE_BAR) {
+      b.quaternion.vmult(this._right.set(1, 0, 0), this._right);
+      const pitchRate = b.angularVelocity.dot(this._right);
+      const T = -(pitch - WHEELIE_BAR) * 9 * s.inertia.pitch * 60 - Math.max(0, pitchRate) * s.inertia.pitch * 14;
+      b.quaternion.vmult(this._tmp.set(T, 0, 0), this._tmp);
+      b.torque.vadd(this._tmp, b.torque);
+    }
+
     // With traction control on, trim the throttle once the slide angle gets excessive
     const slideAngle = Math.abs(v) > 4 ? Math.atan2(Math.abs(vLat), Math.abs(v)) * 57.3 : 0;
     this.slideAngle = slideAngle;
-    dtn.stabilityCut = dtn.tractionControl ? clamp((slideAngle - 28) / 22, 0, 0.75) : 0;
+    const ang = TCS_LEVELS[dtn.tractionControl ? dtn.tcsLevel : 0].angle;
+    dtn.stabilityCut = dtn.tractionControl ? clamp((slideAngle - ang) / 22, 0, dtn.tcsLevel >= 3 ? 1 : 0.75) : 0;
     wi[0].frictionSlip = wi[1].frictionSlip = s.frictionSlipFront * mu * frontLat;
+    // cannon caps each wheel's combined (drive × 0.5, side) impulse at load × frictionSlip, so a
+    // huge drive force would silently eat the tyre's cornering grip and spin a big-power car.
+    // Grip lost to wheelspin is already modelled above (latFactor): give the drive force its own room.
+    if (Nd > 1) for (const i of drv) {
+      const Ni = load(i);
+      if (Ni < 1) continue;
+      const fx = 0.5 * Math.abs(F) * Ni / Nd / Ni;
+      wi[i].frictionSlip = Math.hypot(wi[i].frictionSlip, fx);
+    }
 
     // Service brakes on the undriven axle (cannon's brake is an impulse per step; the driven axle is
     // braked inside the drivetrain), plus the hand brake on the rears of the FWD and AWD cars
+    // Disc temperature → fade (and cold race pads); the friction factor reaches the drivetrain too
+    const bc = this.brakeCompound;
+    const fade = brakeFade(bc, this.brakeTemp);
+    this.brakeFade = dtn.brakeFade = fade;
+    this.brakeTemp = brakeHeat(bc, this.brakeTemp, input.brake * s.maxBrakeForce * fade * Math.abs(v), v, dt);
     const bias = s.brakeBiasFront;
-    const fb = this.drive === 'RWD' ? input.brake * s.maxBrakeForce * bias * 0.5 * dt : 0;
-    const rbService = this.drive === 'FWD' ? input.brake * s.maxBrakeForce * (1 - bias) * 0.5 * dt : 0;
+    // Each wheel's brake is capped at what its tyre can grip: with ABS it holds right at the peak,
+    // without (the Charger) the wheel locks and slides at ~85 %
+    const capped = (i, demand) => {
+      const cap = s.tyreMu * this.surfaceMu * load(i) * dt;
+      if (demand <= cap) return demand;
+      this.locked = true;
+      return cap * (s.abs ? 1 : 0.85);
+    };
+    this.locked = false;
+    const fbD = this.drive === 'RWD' ? input.brake * s.maxBrakeForce * fade * bias * 0.5 * dt : 0;
+    const rbD = this.drive === 'FWD' ? input.brake * s.maxBrakeForce * fade * (1 - bias) * 0.5 * dt : 0;
+    const fb = capped(0, fbD), fb1 = capped(1, fbD);
+    const rbService = Math.min(capped(2, rbD), capped(3, rbD));
     const rbHand = hbOn && !rwd ? s.handbrakeTorque / s.wheelRadius * 0.5 * dt : 0;
     this.vehicle.setBrake(fb, 0);
-    this.vehicle.setBrake(fb, 1);
+    this.vehicle.setBrake(fb1, 1);
     this.vehicle.setBrake(rbService + rbHand, 2);
     this.vehicle.setBrake(rbService + rbHand, 3);
 
@@ -295,7 +337,8 @@ export class Vehicle {
     const fw = v / s.wheelRadius;
     for (let i = 0; i < 4; i++) {
       const locked = (i >= 2 && hbOn) || (input.brake > 0.85 && Math.abs(v) < 0.3);
-      this.wheelSpin[i] = drv.includes(i) && !(hbAwd && i >= 2) ? dtn.wheelW : locked ? 0 : fw;
+      const lockF = i < 2 && this.locked && !s.abs && input.brake > 0.3;
+      this.wheelSpin[i] = drv.includes(i) && !(hbAwd && i >= 2) ? dtn.wheelW : locked || lockF ? 0 : fw;
     }
   }
 

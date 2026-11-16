@@ -483,7 +483,7 @@ body.seq #seqshift { display: flex; }
   align-items: start;
 }
 @media (max-width: 640px) { .pg-body { grid-template-columns: 1fr; } }
-.pg-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.pg-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
 .pg-card {
   display: flex; flex-direction: column; align-items: stretch; gap: 2px; text-align: left; padding: 6px 7px 7px;
   background: rgba(255, 255, 255, 0.035); border: 1px solid var(--line) !important; border-radius: 12px; color: var(--text);
@@ -499,14 +499,14 @@ body.seq #seqshift { display: flex; }
 .pg-card.on svg path { fill: var(--accent); }
 .pg-card.car-gtr.on svg path { fill: #c9ccd2; }
 .pg-card.car-sentra.on svg path { fill: #3d8bff; }
-.pg-card b { font-size: 12px; line-height: 1.15; }
+.pg-card b { font-size: 11px; line-height: 1.15; }
 .pg-card small { font-size: 8.5px; letter-spacing: 0.5px; color: var(--muted); line-height: 1.25; }
 .pg-blurb { margin: 7px 2px 0; font-size: 11px; color: var(--muted); line-height: 1.35; }
 .pg-tune { display: grid; grid-template-columns: 104px 1fr; align-items: center; gap: 2px 8px; margin: 0 0 7px; }
 .pg-tune .g-l { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
 .pg-tune .seg button { padding: 8px 4px; font-size: 12px; }
 .pg-hint { grid-column: 2; font-size: 9.5px; color: var(--muted); opacity: 0.85; }
-.pg-bar { display: grid; grid-template-columns: 92px 1fr 84px; align-items: center; gap: 8px; margin: 5px 0; }
+.pg-bar { display: grid; grid-template-columns: 92px 1fr 100px; align-items: center; gap: 8px; margin: 5px 0; }
 .pg-bar span { font-size: 9.5px; letter-spacing: 1.5px; color: var(--muted); }
 .pg-bar b { font-size: 11.5px; text-align: right; font-variant-numeric: tabular-nums; transition: color 0.2s; }
 .pg-bar.up b { color: #5fe08a; }
@@ -578,3 +578,23 @@ body.drag #dragtree { display: flex; }
 .g-presets button { font-size: 11.5px; }
 #pg-stats .warn { color: #ffb347; font-weight: 700; }
 #pg-engine.custom { border-color: var(--accent) !important; color: var(--accent-2); }
+
+.pg-card.car-amg.on svg path { fill: #9aa3ad; }
+.pg-slider div { display: grid; grid-template-columns: 1fr 96px; align-items: center; gap: 8px; }
+.pg-slider input { margin: 0; height: 24px; }
+.pg-slider b { font-size: 11.5px; text-align: right; font-variant-numeric: tabular-nums; }
+#pg-brakes .warn { color: #ffb347; }
+#pg-brakes .muted { opacity: 0.7; }
+/* Gas slider: thumb line and % readout */
+.pedal.gas .thumb, .pedal.gas .pct { display: none; }
+body.gas-slider .pedal.gas .thumb {
+  display: block; position: absolute; left: 6px; right: 6px; height: 4px; border-radius: 2px; background: #fff;
+  bottom: calc(5% + var(--v, 0) * 88%); box-shadow: 0 0 8px rgba(255, 170, 60, 0.9); opacity: 0;
+}
+body.gas-slider .pedal.gas.down .thumb { opacity: 1; }
+body.gas-slider .pedal.gas .pct { display: block; position: absolute; left: 0; right: 0; top: 10px; text-align: center; font-size: 17px; font-weight: 900; text-shadow: 0 1px 3px #000; }
+body.gas-slider .pedal.gas em { display: none; }
+body.gas-slider .pedal.gas.down { transform: none; }
+body.free #progress { display: none; }
+#btn-tcs.tcs-0 { color: #ff6a5a; }
+#btn-tcs.tcs-3 { color: #5fe08a; }

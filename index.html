@@ -42,13 +42,14 @@
 
     <div id="topbtns">
       <button id="btn-center" class="hbtn tilt-only" aria-label="Centre steering">⟳<small>CENTER</small></button>
+ <button id="btn-tcs" class="hbtn" aria-label="Traction control level">TCS<small id="tcs-label">NORMAL</small></button>
       <button id="btn-cam" class="hbtn" aria-label="Switch camera view">◉<small id="cam-label">CHASE</small></button>
       <button id="btn-reset" class="hbtn" aria-label="Reset car">↺<small>RESET</small></button>
       <button id="btn-pause" class="hbtn" aria-label="Pause">❚❚<small>MENU</small></button>
     </div>
 
     <button id="btn-start" aria-label="Start engine"><span>START</span><small>ENGINE</small></button>
- <div id="health" aria-label="Engine and gearbox strain"><div class="h-row"><span>ENGINE</span><b class="h-eng"><i></i></b></div><div class="h-row"><span>GEARBOX</span><b class="h-tr"><i></i></b></div></div>
+ <div id="health" aria-label="Engine and gearbox strain"><div class="h-row"><span>ENGINE</span><b class="h-eng"><i></i></b></div><div class="h-row"><span>GEARBOX</span><b class="h-tr"><i></i></b></div><div class="h-row"><span>BRAKES</span><b class="h-br"><i></i></b></div></div>
     <div id="dragtree" aria-label="Christmas tree"><i class="st"></i><i class="am"></i><i class="am"></i><i class="am"></i><i class="gr"></i><i class="rd"></i></div>
     <div id="drag-result" role="status" aria-live="polite"></div>
     <div id="toast"></div>
@@ -84,7 +85,7 @@
         <button id="seq-up" aria-label="Shift up">▲<small id="seq-up-l">UP</small></button>
         <button id="seq-down" aria-label="Shift down">▼<small id="seq-down-l">DOWN</small></button>
       </div>
-      <div class="pedal gas" id="pedal-gas"><div class="fill"></div><span>GAS</span><em></em></div>
+      <div class="pedal gas" id="pedal-gas"><div class="fill"></div><i class="thumb"></i><b class="pct"></b><span>GAS</span><em></em></div>
     </div>
   </div>
 
@@ -121,7 +122,11 @@
         </div>
         <div class="setting">
           <label>Traction control <small id="tcs-note"></small></label>
-          <div class="seg" id="set-tcs"><button data-v="0">Off</button><button data-v="1">On</button></div>
+          <div class="seg" id="set-tcs"><button data-v="0">Off</button><button data-v="1">Sport</button><button data-v="2">Normal</button><button data-v="3">Max</button></div>
+        </div>
+        <div class="setting">
+          <label>Gas control</label>
+          <div class="seg" id="set-gas"><button data-v="slider">Slider 0–100%</button><button data-v="pedal">Pedal</button></div>
         </div>
         <div class="setting">
           <label>Units</label>
@@ -151,7 +156,8 @@
           <li><b>Hold the phone like a steering wheel</b> (landscape) and tilt to steer. Tap <b>CENTER</b> to re-zero.</li>
           <li><b>Pull away:</b> hold CLUTCH → drag the knob (or tap) into <b>1</b> → add a little GAS while slowly lifting the clutch.</li>
           <li><b>Shift:</b> lift off gas, CLUTCH in, move the knob, clutch out. Shifting without the clutch grinds unless the revs are matched.</li>
-          <li>Pedals are analog: touch near the top to feather, lower for full.</li>
+          <li><b>GAS</b> is a 0–100 % slider: the higher your finger, the more throttle (the % shows on it). BRAKE and CLUTCH are analog pedals: touch near the top to feather, lower for full.</li>
+          <li><b>TCS</b> button (top right) cycles traction control OFF → SPORT → NORMAL → MAX. MAX keeps even a 3,000 hp build from spinning.</li>
           <li>700 hp through skinny '70s tyres — be gentle with the throttle out of corners or the rear will step out.</li>
           <li>Stalled? Clutch in (or neutral) and tap <b>START</b>.</li>
           <li><b>Drag strip:</b> stop with the front wheels just behind the white line in gear — the tree counts down (amber, amber, amber, GREEN). Leave early and it's a red light.</li>
@@ -178,6 +184,7 @@
       </div>
       <div class="g-col">
         <section class="g-card"><h3>TUNING <small id="pg-tune-car"></small></h3><div id="pg-tunes"></div></section>
+        <section class="g-card"><h3>BRAKE SYSTEM <small>stopping distance from the car's weight, speed and this setup</small></h3><div id="pg-brakes"></div></section>
         <section class="g-card"><h3>PERFORMANCE <small>white tick = stock</small></h3><div id="pg-bars"></div><div class="g-info" id="pg-stats"></div>
           <button id="pg-engine" class="ghost">🔧 ENGINE BUILDER &amp; DYNO</button></section>
       </div>

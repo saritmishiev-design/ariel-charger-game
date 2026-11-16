@@ -3,7 +3,7 @@
 import * as THREE from '../vendor/three.module.min.js';
 import { rng, flakeNormalMap, contactShadowTexture } from './textures.js';
 import { mergeByMaterial } from './merge.js';
-import { extrudeProfile, buildGTR, buildSentra, grilleTexture } from './bodies.js';
+import { extrudeProfile, buildGTR, buildSentra, buildAMG, grilleTexture } from './bodies.js';
 
 // Wheel styles: spokes on the rim face, materials, centre cap and (optional) brake calipers
 const UP = new THREE.Vector3(0, 1, 0);
@@ -117,7 +117,7 @@ function buildCharger(c) {
   return { exhausts: [[-0.62, 0.25, zR + 0.1], [0.62, 0.25, zR + 0.1]] };
 }
 
-const BODIES = { charger: buildCharger, gtr: buildGTR, sentra: buildSentra };
+const BODIES = { charger: buildCharger, gtr: buildGTR, sentra: buildSentra, amg: buildAMG };
 
 export class CarModel {
   constructor(vehicle, envMap) {

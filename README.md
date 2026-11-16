@@ -12,6 +12,15 @@ Nissan GT-R and a 2023 Nissan Sentra, three tracks and a pre-race tuning garage.
   **Tyres** (street / racing slicks), **Suspension** (stock / lowered: body drops 45 mm, lower CoG, stiffer springs,
   far less roll). Performance bars (power, acceleration, top speed, grip, with a tick at stock) update instantly from
   the same physics spec the car drives with (js/cars.js).
+- **Traction control, four levels** (HUD **TCS** button or Settings): OFF / SPORT (lets it slide) / NORMAL /
+  MAX (holds the tyres at peak grip with a proportional controller and cuts power hard if the car rotates — a
+  3,000 hp build launches straight). Big-power launches are kept off their tails by **wheelie bars** (~6°).
+- **Analog gas slider:** the GAS control is a 0–100 % slider — finger height = throttle, with a live % readout
+  (the old pedal mapping is still in Settings).
+- **Brake system** (garage, per car): Street / Racing / Carbon-ceramic compounds (friction, fade temperature,
+  cold bite), line pressure and front/rear bias. Brakes heat up with every stop and fade past the compound's
+  limit (HUD gauge); wheels are capped at tyre grip (ABS on the modern cars; the Charger's lock and slide).
+  The garage shows 100–0 / 200–0 km/h stopping distances from the car's weight, speed and setup.
 - **Engine builder for every car** (🔧 in the garage): bore, stroke, compression, cylinders, layout, induction and
   boost (to 60 psi), gearbox and ratios, tyres — plus **build tiers** (Stock block / Forged / Race / Pro Mod billet:
   block strength, breathing, knock limit, rev ceiling, anti-lag) and quick builds up to a **3,000+ hp Pro Mod swap**.
@@ -26,13 +35,15 @@ Nissan GT-R and a 2023 Nissan Sentra, three tracks and a pre-race tuning garage.
 - **Cars:** 1979 Dodge Charger (RWD, 700 hp blown Hemi, drift-happy); Nissan GT-R R35 tune (AWD, 800 hp 3.8 L V6
   twin-turbo, DCT, ~1.7 g grip, launches to 100 in ~3.4 s, V6 voice with turbo whistle and blow-off flutter);
   2023 Nissan Sentra SV (FWD, 149 hp 2.0 L inline-4, CVT-style automatic, all-season tyres, heavy understeer,
-  quiet economy muffler). Drive layout is modelled in the drivetrain: driven-axle load, wheelspin eating the
+  quiet economy muffler); Mercedes-AMG GT 63 4-door (AWD 4MATIC+, 630 hp 4.0 L V8 biturbo, 2.1 t, 0–100 ≈ 3.4 s,
+  wet-clutch automatic, deep AMG V8 voice with overrun pops). Drive layout is modelled in the drivetrain: driven-axle load, wheelspin eating the
   driven axle's lateral grip (power oversteer RWD / power understeer FWD), brakes split by axle, hand brake on the rears.
 - **Tracks:** *Classic Track* (the original). *Nürburgring Lite*: 7.4 km over ~70 m of hills (grades to 12 %,
   crests, a hairpin valley, a Karussell, a 1.75 km straight) on a cannon heightfield with a cambered, terrain-following
   road. *1/4 Mile Drag Strip*: stage behind the line, the Christmas tree counts down, red light if you jump it;
   millisecond ET (interpolated between physics steps), reaction time, 60 ft / 330 ft / 1/8 / 1000 ft splits, trap speed,
-  a timing tower, and best ET per car.
+  a timing tower, and best ET per car. *Open Free Roam*: a 6 × 6 km tarmac pad with no walls and a marked 6 km test
+  straight; the HUD measures top speed, 0–100, 0–200 and 100–0 braking distance.
 - **Real dimensions:** 5.48 m long, 2.92 m wheelbase, 1.96 m wide, 1,770 kg, 56/44 front weight, low CoM, soft '70s springs.
 - **Drivetrain sim:** torque curve peaking at 910 Nm / 700 hp @ 6,200 rpm, engine inertia, idle governor, rev limiter,
   friction clutch (slip, bite point, stalling), 5-speed (2.95 / 1.94 / 1.34 / 1.00 / 0.80, 3.23 axle, 316 km/h top speed),
@@ -99,10 +110,11 @@ index.html, css/style.css      UI shell, HUD, pedals, shifter, menu
 js/main.js                     bootstrap, loop, camera, laps, drag timing, menus
 js/config.js                   Charger spec & tuning
 js/cars.js, pregame.js         car line-up, tracks, lite tunes → physics spec, performance bars, pre-race garage UI
-js/drivetrain.js               engine / clutch / gearbox / driven-axle model
+js/drivetrain.js               engine / clutch / gearbox / driven-axle model, traction control, failures
+js/brakes.js                   brake compounds, disc temperature & fade, stopping-distance sim
 js/build.js, garage.js         garage build → engine model & spec, dyno + drag-strip sim, garage UI
 js/vehicle.js                  cannon-es raycast vehicle + steering, brakes, aero
-js/carModel.js, bodies.js      procedural 3D Charger (extruded) and lofted GT-R and Sentra, wheels, wheel wells
+js/carModel.js, bodies.js      procedural 3D Charger (extruded) and lofted GT-R, Sentra and AMG GT 63
 js/track.js                    the three tracks: road, terrain/heightfield, curbs, barriers, stands, drag-strip tree
 js/scenery.js                  trees, grass tufts, mountains, billboards, LOD
 js/sky.js, textures.js         sky dome + environment map, procedural textures

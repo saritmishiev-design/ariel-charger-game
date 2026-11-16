@@ -174,13 +174,14 @@ export function buildTrees(track, group, rand, quality, keepClear = []) {
   // Woods around the whole circuit: density as on the classic track, capped for phones
   const B = track.bounds, M = 260;
   const area = (B.maxX - B.minX + 2 * M) * (B.maxZ - B.minZ + 2 * M);
-  const count = Math.round(Math.min(quality === 'high' ? 1500 : 950, (quality === 'high' ? 900 : 600) * area / 3.2e6));
+  const count = track.isFree ? (quality === 'high' ? 500 : 300)
+    : Math.round(Math.min(quality === 'high' ? 1500 : 950, (quality === 'high' ? 900 : 600) * area / 3.2e6));
   const c = new THREE.Color();
   let tries = 0;
   while (pines.length + broad.length < count && tries++ < 40000) {
     const x = B.minX - M + rand() * (B.maxX - B.minX + 2 * M), z = B.minZ - M + rand() * (B.maxZ - B.minZ + 2 * M);
     if (!track.clearOfTrack(x, z, 26)) continue;
-    if (track.inClearZone(x, z)) continue;   // keep the grandstand/pit area open
+    if (track.inClearZone(x, z) || track.onPad(x, z)) continue;   // keep the grandstand/pit area (and the free-roam pad) open
     if (keepClear.some(b => b.clear.some(p => (p.x - x) ** 2 + (p.z - z) ** 2 < 28 * 28))) continue;   // don't hide the billboards
     const k = 0.75 + rand() * 0.7;
     const it = {
@@ -379,6 +380,7 @@ export function buildBillboards(track, group, info) {
   }
   // Drag strip: its braking zone is the shutdown area past the finish line
   if (track.isDrag) slow.push(track.wrap(track.finishIndex + 45));
+  if (track.isFree) slow.push(track.wrap(track.startIndex + 400), track.wrap(track.startIndex - 1100));
 
   // 1) Neon Sentra boards: in the braking zone, beyond the outside of the slow corner, facing the approach
   for (const e of slow) {
@@ -408,7 +410,7 @@ export function buildBillboards(track, group, info) {
     for (const side of [1, -1]) {
       for (const L of [34, 42, 50]) {
         const x = p.x + r.x * side * L, z = p.z + r.z * side * L;
-        if (near(x, z, 260)) continue;
+        if (near(x, z, track.isFree ? 900 : 260)) continue;
         if ((done = place('sarit', x, z, k - 60, k))) break;
       }
       if (done) break;

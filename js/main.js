@@ -2,6 +2,7 @@ import * as THREE from '../vendor/three.module.min.js';
 import * as CANNON from '../vendor/cannon-es.js';
 import { PHYSICS_DT, WALL_CONTACT, BUILD } from './config.js';
 import { Vehicle } from './vehicle.js';
+import { TCS_LEVELS } from './drivetrain.js';
 import { CarModel, PAINTS } from './carModel.js';
 import { Track, TERRAIN_GROUP, DRAG_LENGTH } from './track.js';
 import { Controls } from './controls.js';
@@ -18,9 +19,11 @@ const $ = (id) => document.getElementById(id);
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 
 // ---------------- Settings ----------------
-const DEFAULTS = { units: 'kmh', steer: 'tilt', tilt: 32, tcs: true, auto: false, paint: 'red', volume: 0.9, cam: 0, gfx: 'high', tiltV: 5 };
+const DEFAULTS = { units: 'kmh', steer: 'tilt', tilt: 32, tcs: true, tcsLevel: 2, gas: 'slider', auto: false, paint: 'red', volume: 0.9, cam: 0, gfx: 'high', tiltV: 5 };
 let settings = { ...DEFAULTS };
 try { settings = { ...DEFAULTS, ...JSON.parse(localStorage.getItem('charger.settings') || '{}') }; } catch (e) { /* private mode */ }
+// TCS became four levels: an old "off" carries over
+if (settings.tcsLevelV !== 1) { settings.tcsLevel = settings.tcs === false ? 0 : 2; settings.tcsLevelV = 1; }
 // Tilt calibration changed (v5): move any saved value onto the new scale once
 if (settings.tiltV !== DEFAULTS.tiltV) { settings.tilt = DEFAULTS.tilt; settings.tiltV = DEFAULTS.tiltV; }
 const saveSettings = () => { try { localStorage.setItem('charger.settings', JSON.stringify(settings)); } catch (e) { /* ignore */ } };
@@ -127,11 +130,16 @@ const controls = new Controls({
 
 function applySettings() {
   if (vehicle) {
-    vehicle.drivetrain.tractionControl = settings.tcs;
+    vehicle.drivetrain.tractionControl = settings.tcsLevel > 0;
+    vehicle.drivetrain.tcsLevel = settings.tcsLevel;
     // Sequential, DCT, drag and automatic boxes run their own clutch
     vehicle.drivetrain.autoClutch = settings.auto || SEQ;
   }
   controls.steerMode = settings.steer;
+  controls.gasMode = settings.gas;
+  document.body.classList.toggle('gas-slider', settings.gas === 'slider');
+  $('tcs-label').textContent = TCS_LEVELS[settings.tcsLevel].name;
+  $('btn-tcs').className = `hbtn tcs-${settings.tcsLevel}`;
   controls.tiltRange = settings.tilt;
   hud.units = settings.units;
   audio.setVolume(settings.volume);
@@ -225,6 +233,13 @@ function resetCar() {
     placeAtStart();
     dragReset();
     hud.toast('Staged — select a gear, wait for green', 1.8);
+  } else if (track.isFree) {
+    // Free roam: back on its wheels right where it is, pointing the way it was going
+    const b = vehicle.body, q = b.quaternion;
+    const yaw = Math.atan2(2 * (q.x * q.z + q.w * q.y), 1 - 2 * (q.x * q.x + q.y * q.y));
+    vehicle.reset(b.position.x, 0, b.position.z, yaw);
+    camInit = false;
+    hud.toast('Car reset — select a gear', 1.6);
   } else {
     const sp = track.spawnAt(state.trackIndex >= 0 ? state.trackIndex : 0);
     vehicle.reset(sp.x, sp.y, sp.z, sp.heading);
@@ -295,7 +310,11 @@ function updateFailures(dt) {
   // Gauge: worst of block stress, limiter heat, accumulated damage; gearbox load and damage
   const eng = d.blown ? 1.5 : Math.max(st.engine, st.heat, d.engineDamage);
   const tr = d.transBroken ? 1.5 : Math.max(st.trans, d.transDamage);
-  hud.health(eng, tr, d.blown, d.transBroken);
+  // Brakes: 1 = where this compound starts to fade
+  const brk = vehicle.brakeTemp / vehicle.brakeCompound.fadeStart;
+  hud.health(eng, tr, d.blown, d.transBroken, brk);
+  if (brk > 1 && !fail.warned.brk) { fail.warned.brk = true; hud.toast(`🔥 Brakes fading — ${Math.round(vehicle.brakeTemp)} °C`, 2); }
+  if (brk < 0.8) fail.warned.brk = false;
   if (!d.blown && st.heat > 0.5 && !fail.warned.heat) { fail.warned.heat = true; hud.toast('🔥 Engine overheating on the limiter — SHIFT UP!', 2); }
   if (st.heat < 0.2) fail.warned.heat = false;
   if (!d.blown && d.engineDamage > 0.3 && !fail.warned.eng) { fail.warned.eng = true; hud.toast('⚠ Engine knocking — too much pressure for this block!', 2); }
@@ -502,6 +521,40 @@ function dragFrame() {
   if (!r.foul) showLapBanner(true);
 }
 
+// ---------------- Free roam test meter: top speed, 0–100, 0–200, 100–0 ----------------
+const free = { top: 0, armed: false, t0: null, t100: null, t200: null, brakeFrom: null, stop: null, shown: '' };
+function updateFreeStats(d, v) {
+  const sp = Math.abs(v), t = state.time, b = vehicle.body;
+  free.top = Math.max(free.top, sp);
+  // Acceleration: arm when stopped, time from the moment it rolls
+  if (sp < 0.3) { free.armed = true; free.t0 = null; }
+  else if (free.armed && free.t0 == null && v > 0.3) free.t0 = t;
+  if (free.t0 != null) {
+    const e = t - free.t0;
+    if (sp >= 100 / 3.6 && free.run100 !== free.t0) { free.run100 = free.t0; free.t100 = e; hud.toast(`0–100 km/h: ${e.toFixed(2)} s`, 2); }
+    if (sp >= 200 / 3.6 && free.run200 !== free.t0) { free.run200 = free.t0; free.t200 = e; free.armed = false; hud.toast(`0–200 km/h: ${e.toFixed(2)} s`, 2); }
+    if (d.throttleInput < 0.05 && sp > 3) { free.t0 = null; free.armed = false; }   // lifted: not a clean run
+  }
+  // Braking: from the moment it drops through 100 km/h on the brakes, to a stop
+  const braking = vehicle.brakeInput > 0.5;
+  if (braking && free.brakeFrom == null && sp < 100 / 3.6 && free.prevSp >= 100 / 3.6) free.brakeFrom = { x: b.position.x, z: b.position.z };
+  if (free.brakeFrom && !braking) free.brakeFrom = null;
+  if (free.brakeFrom && sp < 0.2) {
+    free.stop = Math.hypot(b.position.x - free.brakeFrom.x, b.position.z - free.brakeFrom.z);
+    free.brakeFrom = null;
+    hud.toast(`100–0 km/h: ${free.stop.toFixed(1)} m (brakes ${Math.round(vehicle.brakeTemp)} °C)`, 2.5);
+  }
+  free.prevSp = sp;
+  const mph = settings.units === 'mph';
+  const txt = `${Math.round(free.top * (mph ? 2.23694 : 3.6))}|${free.t100}|${free.t200}|${free.stop}`;
+  if (txt === free.shown) return;
+  free.shown = txt;
+  $('lap-no').textContent = `${Math.round(free.top * (mph ? 2.23694 : 3.6))}`;
+  $('lap-time').textContent = free.t100 != null ? `${free.t100.toFixed(2)} s` : '--.-- s';
+  $('lap-last').textContent = free.t200 != null ? `${free.t200.toFixed(2)} s` : '--.-- s';
+  $('lap-best').textContent = free.stop != null ? `${free.stop.toFixed(1)} m` : '--.- m';
+}
+
 // ---------------- Main loop ----------------
 let last = performance.now();
 let acc = 0;
@@ -568,10 +621,13 @@ function tick(dt, input) {
   const b = vehicle.body;
   const q = track.query(b.position.x, b.position.z, state.trackIndex);
   const edge = track.half + 1.3;
-  if (q.dist < edge) { vehicle.surfaceMu = 1; vehicle.surfaceDrag = 1; state.offroad = false; }
+  if (track.isFree) {
+    const on = track.onPad(b.position.x, b.position.z);
+    vehicle.surfaceMu = on ? 1 : 0.62; vehicle.surfaceDrag = on ? 1 : 7; state.offroad = !on;
+  } else if (q.dist < edge) { vehicle.surfaceMu = 1; vehicle.surfaceDrag = 1; state.offroad = false; }
   else if (q.dist < edge + 2.2) { vehicle.surfaceMu = 0.85; vehicle.surfaceDrag = 2.5; state.offroad = true; }
   else { vehicle.surfaceMu = 0.62; vehicle.surfaceDrag = 7; state.offroad = true; }
-  if (!track.isDrag) updateLap(q.index); else state.trackIndex = q.index;
+  if (!track.isDrag && !track.isFree) updateLap(q.index); else state.trackIndex = q.index;
 
   acc += dt;
   let steps = 0;
@@ -592,7 +648,7 @@ function tick(dt, input) {
     state.upsideTimer += dt;
     if (state.upsideTimer > 2.5) { state.upsideTimer = 0; resetCar(); }
   } else state.upsideTimer = 0;
-  if (q.dist > 60 || b.position.y < track.height(b.position.x, b.position.z) - 3) resetCar();
+  if ((q.dist > 60 && !track.isFree) || b.position.y < track.height(b.position.x, b.position.z) - 3) resetCar();
 
   // Tyre smoke & skid marks
   const scrub = vehicle.tyreScrub();
@@ -634,7 +690,11 @@ function tick(dt, input) {
     gear: d.gear, shaftRpm: d.wheelW * SPEC.finalDrive * 60 / (2 * Math.PI),
     spool: d.spool, boostPsi: d.boostPsi,
   });
-  hud.update(track.isDrag ? {
+  if (track.isFree) updateFreeStats(d, vehicle.speed);
+  hud.update(track.isFree ? {
+    dt, rpm: d.rpm, speed: vehicle.speed, gear: d.gear, running: d.running, cranking: d.starterTime > 0,
+    autoDrive: d.autoDrive, broken: d.transBroken, noLaps: true,
+  } : track.isDrag ? {
     dt, rpm: d.rpm, speed: vehicle.speed, gear: d.gear, running: d.running, cranking: d.starterTime > 0,
     lapTime: drag.phase === 'run' ? state.simTime - drag.startT : drag.lastEt,
     lastLap: drag.lastEt, bestLap, lap: drag.runs, autoDrive: d.autoDrive, broken: d.transBroken,
@@ -736,7 +796,8 @@ function buildMenu() {
   };
   seg('set-steer', 'steer');
   seg('set-units', 'units');
-  seg('set-tcs', 'tcs', (v) => v === '1');
+  seg('set-tcs', 'tcsLevel', (v) => +v);
+  seg('set-gas', 'gas');
   seg('set-auto', 'auto', (v) => v === '1');
   $('set-gfx').querySelectorAll('button').forEach(btn => btn.addEventListener('click', () => {
     if (settings.gfx === btn.dataset.v) return;
@@ -760,6 +821,12 @@ function buildMenu() {
   $('btn-garage').addEventListener('click', () => { saveSetup(); location.reload(); });
   $('btn-pause').addEventListener('click', () => pause(true));
   $('btn-cam').addEventListener('click', () => setCam(state.camMode + 1));
+  $('btn-tcs').addEventListener('click', () => {
+    settings.tcsLevel = (settings.tcsLevel + 1) % 4;
+    applySettings(); syncMenu();
+    hud.toast(`Traction control: ${TCS_LEVELS[settings.tcsLevel].name}`, 1.2);
+    haptic(12);
+  });
   $('btn-nos').addEventListener('pointerdown', (e) => { e.preventDefault(); toggleNos(); });
   // Hand brake: hold to pull (multi-touch safe: tracks its own pointers)
   const hbBtn = $('btn-hb'), hbPtrs = new Set();
@@ -778,7 +845,8 @@ function syncMenu() {
   const segSet = (id, val) => $(id).querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.v === String(val)));
   segSet('set-steer', settings.steer);
   segSet('set-units', settings.units);
-  segSet('set-tcs', settings.tcs ? '1' : '0');
+  segSet('set-tcs', settings.tcsLevel);
+  segSet('set-gas', settings.gas);
   segSet('set-auto', settings.auto ? '1' : '0');
   segSet('set-gfx', settings.gfx);
   $('set-tilt').value = settings.tilt;
@@ -835,6 +903,13 @@ function buildWorld() {
   });
   loadBest();
   document.body.classList.toggle('drag', track.isDrag);
+  document.body.classList.toggle('free', track.isFree);
+  if (track.isFree) {
+    $('lap-label').textContent = 'TOP';
+    $('last-label').textContent = '0–200';
+    $('best-label').textContent = '100–0';
+    $('lap-time').textContent = '--.-- s';
+  }
   if (track.isDrag) {
     $('lap-label').textContent = 'RUN';
     $('last-label').textContent = 'LAST ET';

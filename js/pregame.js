@@ -1,6 +1,7 @@
 // Pre-game garage: pick a track and a car, toggle the tunes, watch the performance bars move.
 import { CARS, TRACKS, TUNES, TUNE_DEFAULT, carSpec, performance, carSummary, limits } from './cars.js';
 import { trackOutline } from './track.js';
+import { BRAKES, BRAKE_LIMITS } from './brakes.js';
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
@@ -9,6 +10,7 @@ const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls)
 const SILHOUETTES = {
   charger: { d: 'M7 43 L9 34 Q12 30 30 29 L72 27 Q80 26 86 21 L101 14 Q106 12 119 12 L134 13 Q141 15 151 25 L184 27 Q192 28 194 34 L194 43 Z', wheels: [44, 158] },
   gtr: { d: 'M6 43 L8 36 Q12 31 40 29 L76 26 L101 14 Q108 11 124 12 L141 14 Q157 20 177 26 L190 27 L192 34 L193 43 Z M168 21 L195 19 L195 22 L170 23 Z', wheels: [42, 160] },
+  amg: { d: 'M5 43 L7 35 Q11 30 34 28 L72 26 L94 14 Q100 11 118 11 L136 12 Q150 15 172 25 L190 27 Q194 29 195 34 L195 43 Z', wheels: [40, 160] },
   sentra: { d: 'M8 43 L9 34 Q12 29 36 27 L64 25 L90 12 Q96 10 116 10 L134 11 Q146 14 162 24 L186 25 Q192 26 193 33 L193 43 Z', wheels: [44, 156] },
 };
 
@@ -23,6 +25,17 @@ function drawOutline(canvas, id) {
   canvas.width = w * dpr; canvas.height = h * dpr;
   const g = canvas.getContext('2d');
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (id === 'free') {
+    // A square of tarmac with the test straight through it
+    const sz = Math.min(w, h) - 10, x0 = (w - sz) / 2, y0 = (h - sz) / 2;
+    g.fillStyle = 'rgba(255,255,255,0.1)'; g.fillRect(x0, y0, sz, sz);
+    g.strokeStyle = 'rgba(255,255,255,0.3)'; g.lineWidth = 1; g.strokeRect(x0, y0, sz, sz);
+    g.strokeStyle = '#ff9a3c'; g.lineWidth = 2; g.beginPath(); g.moveTo(x0 + 3, h / 2); g.lineTo(x0 + sz - 3, h / 2); g.stroke();
+    g.fillStyle = '#fff'; g.beginPath(); g.arc(w / 2, h / 2, 3, 0, Math.PI * 2); g.fill();
+    g.font = '700 9px system-ui, sans-serif'; g.fillStyle = '#ffd08a'; g.textAlign = 'center';
+    g.fillText('NO WALLS', w / 2, y0 + 12);
+    return;
+  }
   const pts = trackOutline(id);
   let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
   for (const [x, z] of pts) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z); }
@@ -89,8 +102,33 @@ export class PreGame {
       row.appendChild(el('small', 'pg-hint'));
       tunes.appendChild(row);
     }
+    // Brake system: compound + pressure + bias
+    const bk = $('pg-brakes');
+    const comp = el('div', 'pg-tune', '<span class="g-l">Compound</span>');
+    const cseg = el('div', 'seg');
+    for (const [k, c] of Object.entries(BRAKES)) {
+      const btn = el('button', null, c.name);
+      btn.dataset.brake = k;
+      btn.addEventListener('click', () => { this.tune.brake = k; this.changed(); });
+      cseg.appendChild(btn);
+    }
+    comp.appendChild(cseg);
+    comp.appendChild(el('small', 'pg-hint', ''));
+    bk.appendChild(comp);
+    this.brakeHint = comp.querySelector('.pg-hint');
+    const slider = (key, label, [lo, hi, step], fmt) => {
+      const row = el('label', 'pg-tune pg-slider', `<span class="g-l">${label}</span><div><input type="range" min="${lo}" max="${hi}" step="${step}"><b></b></div>`);
+      const input = row.querySelector('input'), out = row.querySelector('b');
+      input.addEventListener('input', () => { this.tune[key] = +input.value; out.textContent = fmt(+input.value); this.changed(); });
+      bk.appendChild(row);
+      return { input, out, fmt };
+    };
+    this.bPress = slider('bpress', 'Pressure', BRAKE_LIMITS.pressure, (v) => `${Math.round(v * 100)}%`);
+    this.bBias = slider('bbias', 'Bias (front)', BRAKE_LIMITS.bias, (v) => `${Math.round(v * 100)}%`);
+    this.brakeInfo = el('div', 'g-info');
+    bk.appendChild(this.brakeInfo);
     const bars = $('pg-bars');
-    for (const [k, label] of [['hp', 'POWER'], ['accel', 'ACCELERATION'], ['top', 'TOP SPEED'], ['grip', 'GRIP']]) {
+    for (const [k, label] of [['hp', 'POWER'], ['accel', 'ACCELERATION'], ['top', 'TOP SPEED'], ['grip', 'GRIP'], ['brake', 'BRAKING']]) {
       bars.appendChild(el('div', `pg-bar bar-${k}`, `<span>${label}</span><div class="pg-track"><i></i><em></em></div><b></b>`));
     }
   }
@@ -112,6 +150,7 @@ export class PreGame {
 
   refresh() {
     const s = this.setup, carId = s.car, car = CARS[carId], tune = s.tunes[carId];
+    this.tune = tune;
     document.querySelectorAll('#pg-tracks .pg-card').forEach(b => b.classList.toggle('on', b.dataset.id === s.track));
     document.querySelectorAll('#pg-cars .pg-card').forEach(b => b.classList.toggle('on', b.dataset.id === carId));
     $('pg-track-blurb').textContent = TRACKS[s.track].blurb;
@@ -143,6 +182,7 @@ export class PreGame {
       accel: p.t100 ? `0–100 ${p.t100.toFixed(1)} s` : '—',
       top: `${Math.round(p.top)} km/h`,
       grip: `${p.grip.toFixed(2)} g`,
+      brake: `100–0 ${p.stop100.dist.toFixed(1)} m`,
     };
     for (const k of Object.keys(vals)) {
       const row = document.querySelector(`.bar-${k}`);
@@ -153,6 +193,17 @@ export class PreGame {
       row.classList.toggle('up', d > 0.004);
       row.classList.toggle('down', d < -0.004);
     }
+    // Brake system readouts
+    document.querySelectorAll('#pg-brakes [data-brake]').forEach(b => b.classList.toggle('on', b.dataset.brake === spec.brakeCompound));
+    const bc = BRAKES[spec.brakeCompound];
+    this.brakeHint.textContent = { street: 'Fades from ~420 °C — fine on the road, cooks on track', racing: 'More bite, fade-free to ~620 °C; a little weak when cold', carbon: 'Huge bite, shrugs off heat to ~950 °C; wants temperature' }[spec.brakeCompound];
+    this.bPress.input.value = tune.bpress; this.bPress.out.textContent = this.bPress.fmt(tune.bpress);
+    this.bBias.input.value = spec.brakeBiasFront; this.bBias.out.textContent = this.bBias.fmt(spec.brakeBiasFront) + (tune.bbias ? '' : ' (stock)');
+    const lockF = spec.brakeBiasFront > 0.72, lockR = spec.brakeBiasFront < 0.56;
+    this.brakeInfo.innerHTML = `<span>100–0 <b>${p.stop100.dist.toFixed(1)} m</b></span><span>200–0 <b>${p.stop200.dist.toFixed(1)} m</b></span>` +
+      `<span>Clamp force <b>${Math.round(spec.maxBrakeForce / 1000)} kN</b> · ${spec.abs ? 'ABS' : 'no ABS'}</span>` +
+      (lockR ? '<span class="warn">⚠ Rear-biased: the tail will lock and step out under hard braking</span>' : lockF ? '<span class="warn">⚠ Front-heavy bias: long stops, the fronts do all the work</span>' : '') +
+      `<span class="muted">${bc.name} · fades from ${bc.fadeStart} °C</span>`;
     const L = limits(spec, engine);
     $('pg-stats').innerHTML = [
       L.engineLevel === 'blow' ? '<span class="warn">💥 Engine over its limit — it will blow</span>' : L.engineLevel === 'edge' ? '<span class="warn">⚠ Engine near its limit</span>' : '',

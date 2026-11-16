@@ -156,6 +156,7 @@ export function grilleTexture(kind, color = '#9aa0a8') {
   g.fillStyle = '#050506'; g.fillRect(0, 0, S, S);
   g.strokeStyle = color; g.lineWidth = kind === 'bars' ? 5 : 3;
   if (kind === 'bars') for (let y = 8; y < S; y += 21) { g.beginPath(); g.moveTo(0, y); g.lineTo(S, y); g.stroke(); }
+  else if (kind === 'vbars') { g.lineWidth = 7; for (let x = 6; x < S; x += 16) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, S); g.stroke(); } }
   else {
     const r = 11;
     for (let row = 0; row < 8; row++) for (let col = 0; col < 7; col++) {
@@ -363,6 +364,85 @@ export function buildSentra(c) {
 
   cabin(interior, trim, Y, u, { seatU: 1.95, dashU: 0.85, wheelU: 1.45, seatX: 0.38, hip: 0.56, rear: 2.75 });
   return { exhausts: [[-0.5, 0.3, zR + 0.02]], rim: SENTRA_RIM, arch: 0.42 };
+}
+
+// ------------------------------------------------------------------ Mercedes-AMG GT 63 (4-door)
+export const AMG_RIM = { spokes: 10, split: false, spokeW: 0.03, spokeT: 0.03, color: 0x2a2c30, rough: 0.22, cap: 0x111111, rimK: 0.74, caliper: 0xb08a4a };
+
+export function buildAMG(c) {
+  const { add, Y, spec, zf, zR, zF, paint, chrome, black, glass, trim, tailMat, reverseMat, headMat, interior, envMap } = c;
+  const u = (d) => zf + d;
+  const L = spec.wheelbase, hub = spec.wheelRadius, W = spec.width / 2;
+  const uF = zF - zf, uR = zR - zf;
+  const gloss = new THREE.MeshPhysicalMaterial({ color: 0x050506, roughness: 0.1, clearcoat: 1, envMap });
+  const plastic = new THREE.MeshStandardMaterial({ color: 0x141518, roughness: 0.6, envMap });
+  const housing = new THREE.MeshStandardMaterial({ color: 0x101114, metalness: 0.8, roughness: 0.25, envMap });
+  const panam = new THREE.MeshStandardMaterial({ map: grilleTexture('vbars', '#d6d9de'), metalness: 0.95, roughness: 0.15, envMap });
+  panam.map.repeat.set(1.5, 1);
+  const mats = { paint, trim: plastic, cap: paint, glass, cpillar: paint, bpillar: gloss };
+
+  // Long low bonnet with power domes, wide rear haunches, a fastback falling to a short liftback tail
+  const B = (uu, yb, ys, yt, yc, wb, ws, wt) => ({ u: uu, yb, ys, yt, yc, wb: wb * W, ws: ws * W, wt: wt * W });
+  addLoft(add, loftBody({
+    Y, zf, hub, arches: [[0, 0.45], [L, 0.45]], keys: [
+      B(uF, 0.3, 0.5, 0.66, 0.68, 0.84, 0.88, 0.62),
+      B(uF + 0.08, 0.2, 0.55, 0.74, 0.77, 0.93, 0.97, 0.75),
+      B(uF + 0.5, 0.19, 0.64, 0.82, 0.84, 0.95, 0.99, 0.79),
+      B(0, 0.19, 0.68, 0.86, 0.88, 0.96, 1.0, 0.8),
+      B(0.78, 0.19, 0.74, 0.94, 0.94, 0.96, 0.99, 0.78),
+      B(1.8, 0.2, 0.76, 0.97, 0.97, 0.95, 0.975, 0.76),
+      B(L - 0.2, 0.21, 0.8, 1.0, 1.0, 0.96, 1.0, 0.8),
+      B(L + 0.5, 0.23, 0.82, 1.0, 1.02, 0.95, 0.985, 0.78),
+      B(uR - 0.08, 0.3, 0.8, 0.99, 1.0, 0.86, 0.92, 0.7),
+      B(uR, 0.4, 0.74, 0.95, 0.95, 0.78, 0.84, 0.62),
+    ],
+  }), mats);
+  const G = (uu, yb, yt, yc, wb, wt) => ({ u: uu, yb, yt, yc, wb, wt });
+  addLoft(add, loftCabin({
+    Y, zf, roof: [1.6, 2.5], cpU: 2.95, bU: 2.0, keys: [
+      G(0.78, 0.935, 0.94, 0.94, 0.76, 0.74), G(1.2, 0.95, 1.21, 1.23, 0.77, 0.66), G(1.65, 0.965, 1.415, 1.445, 0.77, 0.6),
+      G(2.45, 0.985, 1.41, 1.44, 0.78, 0.6), G(3.2, 1.0, 1.18, 1.2, 0.77, 0.65), G(uR - 0.3, 1.0, 1.005, 1.01, 0.72, 0.68),
+    ],
+  }), mats);
+
+  // Power domes on the bonnet
+  for (const s of [-1, 1]) {
+    const d = add(new THREE.BoxGeometry(0.16, 0.025, 1.0), paint, s * 0.24, Y(0.86), u(-0.2));
+    d.rotation.x = -0.07;
+  }
+  // Front: Panamericana grille (vertical chrome slats), star, slim LED lights, A-wing bumper intakes
+  const nose = zF - 0.004;
+  add(new THREE.BoxGeometry(0.62, 0.3, 0.03), panam, 0, Y(0.52), nose, false);
+  add(new THREE.BoxGeometry(0.66, 0.025, 0.04), chrome, 0, Y(0.675), nose, false);
+  const star = add(new THREE.CylinderGeometry(0.075, 0.075, 0.03, 24), chrome, 0, Y(0.55), nose - 0.02, false);
+  star.rotation.x = Math.PI / 2;
+  for (const s of [-1, 1]) {
+    lamp(add, headMat, housing, { x: s * 0.6, y: Y(0.69), z: zF + 0.12, w: 0.38, h: 0.05, d: 0.1, ry: s * 0.42, rx: -0.2 });
+    add(new THREE.BoxGeometry(0.3, 0.012, 0.02), headMat, s * 0.62, Y(0.66), nose + 0.03, false);     // LED brow
+    add(new THREE.BoxGeometry(0.3, 0.18, 0.03), gloss, s * 0.6, Y(0.38), nose + 0.02, false);         // A-wing intakes
+    add(new THREE.BoxGeometry(0.012, 0.03, 0.24), black, s * (W - 0.005), Y(0.72), zf + 0.62, false); // fender vent
+    const mir = add(new THREE.BoxGeometry(0.1, 0.08, 0.17), paint, s * 0.96, Y(1.0), u(0.95));
+    mir.rotation.y = s * 0.22;
+    for (const du of [1.6, 2.55]) add(new THREE.BoxGeometry(0.012, 0.025, 0.16), chrome, s * (W - 0.006), Y(0.9), u(du), false);
+  }
+  add(new THREE.BoxGeometry(W * 2 - 0.3, 0.035, 0.2), gloss, 0, Y(0.21), zF + 0.06);                // splitter
+  // Rear: slim LED tail lights across the liftback, AMG lip spoiler, diffuser, four trapezoid tips
+  const tail = zR + 0.004;
+  for (const s of [-1, 1]) lamp(add, tailMat, housing, { x: s * 0.5, y: Y(0.9), z: tail - 0.01, w: 0.46, h: 0.05, d: 0.03 });
+  add(new THREE.BoxGeometry(0.5, 0.012, 0.02), tailMat, 0, Y(0.9), tail, false);
+  add(new THREE.BoxGeometry(1.4, 0.025, 0.14), gloss, 0, Y(1.0), zR - 0.12);                       // lip spoiler
+  add(new THREE.BoxGeometry(0.12, 0.04, 0.02), reverseMat, 0, Y(0.66), tail, false);
+  add(new THREE.BoxGeometry(0.5, 0.14, 0.015), black, 0, Y(0.66), tail, false);
+  add(new THREE.BoxGeometry(W * 2 - 0.3, 0.15, 0.14), gloss, 0, Y(0.31), zR - 0.04);
+  for (let k = -2; k <= 2; k++) add(new THREE.BoxGeometry(0.015, 0.11, 0.22), gloss, k * 0.14, Y(0.27), zR - 0.05, false);
+  const exhausts = [];
+  for (const x of [-0.66, -0.5, 0.5, 0.66]) {
+    add(new THREE.BoxGeometry(0.13, 0.07, 0.12), chrome, x, Y(0.3), zR - 0.03, false);
+    add(new THREE.BoxGeometry(0.1, 0.045, 0.01), new THREE.MeshBasicMaterial({ color: 0x050505 }), x, Y(0.3), zR + 0.032, false);
+    exhausts.push([x, 0.3, zR + 0.04]);
+  }
+  cabin(interior, trim, Y, u, { seatU: 2.1, dashU: 1.0, wheelU: 1.6, seatX: 0.38, hip: 0.52, rear: 3.0 });
+  return { exhausts, rim: AMG_RIM, arch: 0.45 };
 }
 
 /** Seats, dash and steering wheel (seen through the glass and in the cockpit view). */

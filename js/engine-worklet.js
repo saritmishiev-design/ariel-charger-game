@@ -29,6 +29,9 @@ function bankPattern(cyl, layout) {
 const PROFILES = {
   hemi: { lope: 1, f1: [150, 0.02], f2: [380, 0.034], g1: 1.5, g2: 0.35, fc: [300, 2300, 0.26, 6000], pipes: [66, 103], comb: [330, 410], crackle: 0.07, spread: 0.56, gain: 1, body: 1 },
   vr38: { lope: 0, f1: [230, 0.03], f2: [640, 0.06], g1: 1.1, g2: 0.6, fc: [450, 2500, 0.34, 4600], pipes: [95, 148], comb: [520, 650], crackle: 0.035, spread: 0.18, gain: 0.95, body: 0.7 },
+  // AMG M177: hot-V biturbo cross-plane V8 — no big-cam lope, but deep, long pipes, a heavy
+  // bass body and plenty of pops and bangs on the overrun
+  m177: { lope: 0.25, f1: [110, 0.018], f2: [290, 0.03], g1: 1.8, g2: 0.45, fc: [260, 1900, 0.22, 4200], pipes: [52, 82], comb: [250, 320], crackle: 0.16, spread: 0.3, gain: 0.9, body: 1.5 },
   mr20: { lope: 0, f1: [300, 0.03], f2: [820, 0.05], g1: 0.8, g2: 0.3, fc: [240, 900, 0.12, 2200], pipes: [120, 172], comb: [600, 720], crackle: 0, spread: 0.12, gain: 0.5, body: 0.5 },
 };
 
